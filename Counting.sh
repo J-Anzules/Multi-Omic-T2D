@@ -5,7 +5,8 @@
 #
 # # This whole process seems to be deprecated
 #
-#
+# But what this does is align to convert the rna-seq alignments to bam and 
+# then quantify using featureCounts
 
 
 # move to where the data will  handled
