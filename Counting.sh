@@ -1,5 +1,13 @@
 #!/bin/bash
 
+############################################
+#
+#
+# # This whole process seems to be deprecated
+#
+#
+
+
 # move to where the data will  handled
 cd /mnt/c/Users/jonan/Documents/Tyseq/Data
 
@@ -9,6 +17,11 @@ read input_folder
 # trimmed_fastq_2_aligned
 echo "Name the output folder"
 read output_folder
+
+# Prompt the user for the number of cores
+echo "Enter the number of cores to use:"
+read cores
+
 
 # Making the outputfolder
 mkdir "$output_folder"
@@ -34,6 +47,7 @@ for file in "${input_folder}"/*.sam
     echo "counts filename: $counts_file"
     
     # processing using samtools
+    
 
     echo "Processing file: ${filename}...."
     samtools view -bS "$file" > "$new_file"
@@ -47,6 +61,7 @@ for file in "${input_folder}"/*.sam
     # featureCounts
     echo "Making the counts file: ${filename}...."
     featureCounts   -a hg19/GRCh37_gencodesgenes_hg19/gencode.v19.chr_patch_hapl_scaff.annotation.gtf \
+                    -T "$cores" \
                     -o "$counts_file" \
                     "$sorted_file"
 
@@ -55,4 +70,5 @@ done
 
 # Moving all bam files
 mkdir "$output_folder/bam_files"
-mv *.bam "$output_folder/bam_files"
+mv "$output_folder/*.bam" "$output_folder/bam_files"
+mv "$output_folder/*.bai" "$output_folder/bam_files"
