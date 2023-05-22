@@ -5,8 +5,13 @@
 #
 # # This whole process seems to be deprecated
 #
-# But what this does is align to convert the rna-seq alignments to bam and 
-# then quantify using featureCounts
+# This script is to be performed after the Alignment.sh step, where the fasta file's were
+# were aligned to the hg19 genome found here: https://www.gencodegenes.org/human/release_19.html
+# 
+# Here is a brief summary on the steps:
+# Convert sam to bam files
+# sort the files
+# 
 
 
 # move to where the data will  handled
