@@ -1,5 +1,13 @@
 #!/bin/bash
 
+############################################
+#
+#
+# Iterates through all of the data files, asks information from the users (core use, and 
+# folder target), and aligs each file GRCh37.hg19
+
+
+
 # move to where the data will  handled
 cd /mnt/c/Users/jonan/Documents/Tyseq/Data
 
