@@ -1,5 +1,12 @@
 #!/bin/bash
 
+############################################
+#
+# performs a fastqc analysis of all of my files
+#
+#
+
+
 # move to where the data will  handled
 cd /mnt/c/Users/jonan/Documents/Tyseq/Data
 
