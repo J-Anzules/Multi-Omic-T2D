@@ -1,0 +1,1015 @@
+---
+title: "5XFAD Microbiome Part2 More Trim"
+author: "Madelyn Houser"
+date: "9/22/2020"
+output: 
+  html_document:
+    toc: true
+  word_document:
+    toc: true
+---
+
+```{r packages}
+library("tidyverse")
+packageVersion("tidyverse")
+library("phyloseq")
+packageVersion("phyloseq")
+library("decontam")
+packageVersion("decontam")
+library("Hmisc")
+packageVersion("Hmisc")
+library("corrplot")
+packageVersion("corrplot")
+library("ggpubr")
+packageVersion("ggpubr")
+library("DESeq2")
+packageVersion("DESeq2")
+library("apeglm")
+packageVersion("apeglm")
+```
+```{r setseed}
+# Set seed so that results are fully reproducible.
+set.seed(100)
+```
+  
+  
+# Identify and Remove Contaminants
+
+## Check library sizes
+
+We would like to remove sequence data associated with any contaminants in the samples, and these can be identified based on presence in the negative control samples and on their frequency in samples with different library sizes.
+
+```{r librarysize, fig.height=2, fig.width=4}
+# Load phyloseq object
+ps <- readRDS("F:/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/phyloseqobject_moretrim.RDS")
+
+# Look at library sizes for each sample
+sample_sums(ps)
+samdf <- as.data.frame(sample_data(ps))
+samdf
+samdf$Library <- sample_sums(ps)
+samdf <- samdf[order(samdf$Library),]
+samdf$Index <- seq(nrow(samdf))
+ggplot(data=samdf, aes(x=Index, y=Library, color=is.ctrl)) + geom_point()
+```
+  
+*The negative control samples have few reads compared with the postive controls and the true samples, as expected, with the exception of the one sample identified in the first part of the analysis as being of poor quality. The library sizes for the true samples range from 95,186 to 203,676, a 2.14X size difference.*
+
+## Identify contaminants - frequency method
+
+We will use the ```decontam``` package to identify contaminants.
+
+```{r decontamFreq}
+# Remove positive control samples from phyloseq object
+ps1 <- ps %>% subset_samples(Subject != "Positive-1") %>% subset_samples(Subject != "Positive-2")
+
+# Identify contaminants using the frequency method (contaminant sequences more frequent in samples with less DNA to start with)
+contamdf.freq <- isContaminant(ps1, method="frequency", conc="Concentration", neg="is.neg", threshold=0.1)
+table(contamdf.freq$contaminant) # Number of contaminants identified (true) by this method
+which(contamdf.freq$contaminant) # The sequence numbers identified as contaminants by this method
+
+# Compare the relationship between DNA quantity and frequency for sequences identified as true vs. contaminants
+# Sequences 1-7 were not identified as contaminants while the other sequences were.
+plot_frequency(ps1, taxa_names(ps1)[c(1, 2, 3, 4, 5, 6, 7)], conc="Concentration", neg="is.neg") + xlab("DNA Concentration") + ggtitle("True Sequences")
+plot_frequency(ps1, taxa_names(ps1)[which(contamdf.freq$contaminant)], conc="Concentration", neg="is.neg") + xlab("DNA Concentration")  + ggtitle("Identified Contaminants")
+```
+  
+*The frequency method identified 13 sequences as contaminants. These sequences were not detected in the majority of samples, not detected in the negative control samples, and the linear relationships are not very convincing.*
+  
+## Identify contaminants - prevalence method
+  
+We can also identify contaminants based on their presence in the negative control samples.
+
+```{r decontamPrev}
+contamdf.prev <- isContaminant(ps1, method="prevalence", neg="is.neg")
+table(contamdf.prev$contaminant)
+which(contamdf.prev$contaminant)
+
+# We can visualize the prevalence in negative control and true samples
+ps.pa <- transform_sample_counts(ps1, function(abund) 1*(abund>0))
+ps.pa.neg <- prune_samples(sample_data(ps.pa)$is.neg == "TRUE", ps.pa)
+ps.pa.pos <- prune_samples(sample_data(ps.pa)$is.neg == "FALSE", ps.pa)
+df.pa <- data.frame(pa.pos=taxa_sums(ps.pa.pos), pa.neg=taxa_sums(ps.pa.neg), contaminant=contamdf.prev$contaminant)
+ggplot(data=df.pa, aes(x=pa.neg, y=pa.pos, color=contaminant)) +
+  geom_point() +
+  xlab("Prevalence (Negative Controls)") +
+  ylab("Prevalence (True Samples)")
+
+# Compare the relationship between DNA quantity and frequency for sequences identified as true vs. contaminants by the prevalence method
+plot_frequency(ps1, taxa_names(ps1)[which(contamdf.prev$contaminant)], conc="Concentration") + xlab("DNA Concentration") + ggtitle("Identified Contaminants")
+```
+  
+*The prevalence method with standard threshold (0.1) identified 10 sequences as contaminants, and it identified those that were abundant in negative controls and rarely identified in samples. There was no overlap in sequences identified between methods.*
+  
+## Check decontam thresholds
+  
+```{r decontamThresh}
+# Graph the decontam scores (lower scores indicate likely contaminants) for sequences found in 3 or more samples
+contamdf <- rbind(cbind(contamdf.freq, Method="Frequency"), cbind(contamdf.prev, Method="Prevalence")) %>% filter(prev >=3)
+contamdf$Prevalence <- cut(contamdf$prev, c(0, 3, 6, 10, 9999), labels=c("3", "4-6", "7-10", "11+"))
+ggplot(contamdf, aes(p, fill=Prevalence)) +
+  geom_histogram(binwidth=0.01) +
+  labs(x = "decontam Score", y="Number ASVs") +
+  facet_wrap(~Method)
+```
+  
+*These graphs confirm that the number of likely contaminants is very low. The default threshold (decontam score<0.1) is likely to be appropriate. We will remove the contaminants identified by the prevalence method from the data.*
+  
+## Remove contaminants
+  
+```{r decontamRemove}
+# Remove contaminants identified by the prevalence method from the data
+psdecon <- prune_taxa(!contamdf.prev$contaminant, ps)
+psdecon
+
+rm(contamdf, contamdf.freq, contamdf.prev, df.pa, ps.pa, ps.pa.neg, ps.pa.pos)
+detach("package:decontam", unload=TRUE)
+```
+  
+  
+# Alpha Diversity
+
+For our diversity measurements, we want to remove the positive and negative control samples from the dataset.
+```{r prune}
+# Remove negative and positive control samples
+sample_names(psdecon)
+samdfdecon <- sample_data(psdecon)
+ps2 <- prune_samples(!samdfdecon$is.ctrl, psdecon)
+
+# Check read counts of the true samples
+sample_sums(ps2)
+
+# We see that 359-1-25-18 has a low number of reads compared with the other samples. This was the sample that had a much smaller percentage of reads passing the original filtering thresholds. We will remove it.
+
+# Remove poor quality sample
+ps3 <- prune_samples(sample_names(ps2) != "359-1-25-18", ps2) 
+
+ps3
+sample_names(ps3)
+```
+  
+We'll add the alpha diversity values to our sample data.
+
+```{r alphadivdf}
+# Get alpha diversity values for each sample
+ad <- data.frame(estimate_richness(psdecon, measures=c("Shannon", "InvSimpson")))
+ad$Subject <- rownames(ad)
+
+# Add alpha diversity values to sample data
+samdfdecon <- data.frame(samdfdecon)
+samdfdecon <- merge(samdfdecon, ad)
+write_csv(samdfdecon, "F:/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/SampleDataAlphaDiv.csv")
+rownames(samdfdecon) <- samdfdecon$Subject
+samdfdecon <- sample_data(samdfdecon)
+psdecon <- merge_phyloseq(psdecon, samdfdecon)
+
+# Remove negative and positive control samples
+ps2 <- prune_samples(!samdfdecon$is.ctrl, psdecon)
+
+# Remove poor quality sample
+ps3 <- prune_samples(sample_names(ps2) != "359-1-25-18", ps2) 
+```
+  
+**Then we'll plot alpha diversity.**
+  
+```{r alphdivmergeplot}
+df <- data.frame(sample_data(ps3))
+
+ggplot(df, aes(x=Diet, y=Shannon, fill=Treatment)) +
+  scale_shape_manual(values=c(21, 24)) +
+  geom_jitter(aes(fill=Treatment, shape=Genotype), position=position_jitterdodge(jitter.width=0.05, dodge.width=0.9), size=3) +
+  scale_fill_manual(values=c("grey47", "white")) +
+  guides(fill = guide_legend(override.aes = list(shape = 21))) +
+  theme_classic() +
+  theme(text=element_text(family="Arial", size=12),	axis.title.x = element_blank()) +
+  stat_summary(
+	fun.ymax=function(i) mean(i) + (sd(i)/sqrt(length(i))), 
+    fun.ymin=function(i) mean(i) - (sd(i)/sqrt(length(i))),
+    geom="errorbar", width=0.2, position=position_dodge(width=0.9))
+```
+
+  
+```{r alphadiv, fig.width=6, fig.height=8}
+# Plot alpha-diversity
+
+SI <- ggplot(df, aes(x=Treatment, y=Shannon)) +
+  geom_jitter(aes(shape=Genotype, color=Treatment), size=3, width=0.2) +
+  theme_bw() +
+  scale_color_grey(start = 0, end = 0.8) +
+  ggtitle("Alpha Diversity - Shannon Index") +
+  facet_wrap(~ Diet) +
+  stat_compare_means(method=t.test, label.x=1.4)
+
+ISI <- ggplot(df, aes(x=Treatment, y=InvSimpson)) +
+  geom_jitter(aes(shape=Genotype, color=Treatment), size=3, width=0.2) +
+  theme_bw() +
+  scale_color_grey(start = 0, end = 0.8) +
+  ggtitle("Alpha Diversity - Inverse Simpson Index") +
+  facet_wrap(~ Diet) +
+  stat_compare_means(method=t.test, label.x=1.4)
+
+ggarrange(SI, ISI, ncol=1, nrow=2)
+
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/AlphaDiversityByTreatment.pdf")
+
+```
+  
+### Results: Alpha diversity and treatment
+  
+#### *Alpha diversity reflects the richness and evenness of taxa in the environment. More diverse populations have higher alpha diversity indices. The Shannon index is influenced by rare taxa while the inverse Simpson index typically reflects the contribution of dominant taxa. There is a significant reduction (Wilcoxon rank-sum test) in both of these indices with XPro treatment in control diet as well as HFHF diet mice, indicating a reduction in bacterial diversity. There appear to be few differences in alpha diversity by genotype with the possible exception of XPro-treated control diet mice, in which Tg mice had lower alpha diversity values than Non-Tg. There are, however, very few mice in this category (x=2 Non-Tg, x=3 Tg), so this could be a chance occurrence.*
+  
+  
+```{r alphadiv2, fig.width=6, fig.height=8}
+# Plot alpha-diversity
+
+SI2 <- ggplot(df, aes(x=Diet, y=Shannon)) +
+  geom_jitter(aes(shape=Genotype, color=Diet), size=3, width=0.2) +
+  theme_bw() +
+  ggtitle("Alpha Diversity - Shannon Index") +
+  facet_wrap(~ Treatment) +
+  stat_compare_means(method=t.test, label.x=1.4)
+
+ISI2 <- ggplot(df, aes(x=Diet, y=InvSimpson)) +
+  geom_jitter(aes(shape=Genotype, color=Diet), size=3, width=0.2) +
+  theme_bw() +
+  ggtitle("Alpha Diversity - Inverse Simpson Index") +
+  facet_wrap(~ Treatment) +
+  stat_compare_means(method=t.test, label.x=1.4)
+
+ggarrange(SI2, ISI2, ncol=1, nrow=2)
+
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/AlphaDiversityByDiet.pdf")
+
+```
+  
+### Results: Alpha diversity and diet
+  
+#### *We confirm that diet does not produce significant changes in alpha diversity in these mice.*
+  
+  
+## Alpha diversity regression
+  
+We can evaluate factors influencing alpha diversity another way, using a linear regression.
+
+```{r lmad}
+summary(lm(Shannon ~ Treatment + Diet + Genotype, df))
+summary(lm(InvSimpson ~ Treatment + Diet + Genotype, df))
+```
+  
+### Results: Alpha diversity and all factors
+  
+#### *This analysis evaluates which factors are associated with the alpha diversity measures and finds that XPro treatment reduces alpha diversity significantly when diet and genotype are taken into account, and that diet and genotype are not associated with alpha diversity.*
+  
+```{r endad}
+# Clean up objects not needed for further analyses
+rm(ad, ISI, ISI2, ps, SI, SI2)
+```
+  
+  
+  
+# Beta Diversity
+
+**We will also evaluate community dissimilarity among the samples using beta diversity measures (i.e. how distinct are the bacterial communities in different samples?).**
+
+## Beta diversity - Bray-Curtis method
+
+*The Bray-Curtis dissimilarity method evaluates beta diversity based on read counts.*
+
+```{r ord}
+# transform data to proportions to account for differences in sampling depth/library size
+ps.prop <- transform_sample_counts(ps3, function(otu) otu/sum(otu))
+```
+
+```{r bray, fig.width=6}
+# Ordinate with Bray-Curtis method using non-metric multidimensional scaling
+# This metric takes abundance into account
+ord.nmds.bray <- ordinate(ps.prop, method="NMDS", distance="bray")
+ord.nmds.bray
+
+# 20 iterations were sufficient to reach a convergent solution, and the stress is below 0.2 (at or above would be considered suspect), so two dimensions should be sufficient
+
+ # Plot ordination
+plot_ordination(ps3, ord.nmds.bray, color="Diet", shape="Genotype", title="Bray-Curtis") +
+  scale_shape_manual(values=c(21, 24)) +
+  scale_color_manual(values=c("#E69F00", "#56B4E9")) +
+  geom_point(aes(fill=Treatment), size=3, stroke=1.5) +
+  scale_fill_manual(values=c("grey47", "white")) +
+  guides(fill = guide_legend(override.aes = list(shape = 21)))
+
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/BetaDiversity_BrayCurtis.pdf")
+    
+
+# Test for significant differences by factor
+BC.dist <- vegan::vegdist(otu_table(ps.prop), method="bray")
+vegan::adonis2(BC.dist ~ Treatment + Diet + Genotype, data=df, permutations=999, method="bray", by="margin")
+```
+  
+### Results: Beta diversity - Bray Curtis
+  
+#### *It is apparent visually from the plot and statistically from the permutation test that there are significant differences in bacterial communities based on XPro treatment and based on diet. Genotype does not have a significant effect on beta diversity.*
+  
+  
+## Beta diversity - UniFrac method
+
+*The UniFrac (unique fraction) metric evaluates beta diversity based on the phylogenetic relatedness of bacterial taxa, and it does so based on the presence/absence of taxa. It relies on the phylogenetic tree generated in Part 1 of this analysis.*
+  
+```{r Unifrac, fig.width=6}
+# Set seed for reproducibility (selected based on ordination converging within 20 iterations)
+set.seed(5)
+
+# Ordinate with unweighted UniFrac method using non-metric multidimensional scaling
+ord.nmds.unifrac <- ordinate(ps.prop, method="NMDS", distance="unifrac")
+ord.nmds.unifrac
+
+# 20 iterations were not sufficient to reach a convergent solution, but the stress is below 0.2 and in line with other ordination methods in this analysis, so two dimensions are sufficient.
+
+ # Plot ordination
+plot_ordination(ps3, ord.nmds.unifrac, color="Diet", shape="Genotype", title="Unweighted UniFrac", axes=c(1,2)) +
+  scale_shape_manual(values=c(21, 24)) +
+  scale_color_manual(values=c("#E69F00", "#56B4E9")) +
+  geom_point(aes(fill=Treatment), size=3, stroke=1.5) +
+  scale_fill_manual(values=c("grey47", "white")) +
+  guides(fill = guide_legend(override.aes = list(shape = 21)))
+
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/BetaDiversity_UniFrac.pdf")
+
+# Test for significant differences by factor
+Uni.dist <- UniFrac(ps.prop)
+vegan::adonis2(Uni.dist ~ Treatment + Diet + Genotype, data=df, permutations=999, method="unifrac", by="margin")
+
+```
+  
+### Results: Beta diversity - UniFrac
+  
+#### *It is clear that the bacterial communities in different experimental groups are not as dissimilar based on the presence/absence of related taxa as they are based on sequence counts. There is less separation between XPro-treated and saline-treated mice and between control and HFHF diet mice by this metric than there was by the Bray-Curtis method. Because UniFrac is based on presence/absence of taxa, it is sensitive to changes in low-abundance taxa, so the lack of separation by this method suggests that the differences observed by the Bray-Curtis method were likely driven predominantly by abundant taxa. We still find that there is a significant difference in the bacterial communities of XPro- and saline-treated mice by the UniFrac method, but no differences based on diet or genotype.*
+  
+  
+## Beta diversity - Weighted UniFrac method
+
+*The weighted UniFrac metric evaluates beta diversity based on the phylogenetic relatedness of bacterial taxa, and it takes into account the relative abundances of the taxa. It relies on the phylogenetic tree generated in Part 1 of this analysis.*
+  
+```{r wUnifrac, fig.width=6}
+# Set seed for reproducibility
+set.seed(100)
+
+# Ordinate with weighted UniFrac method using non-metric multidimensional scaling
+ord.nmds.wunifrac <- ordinate(ps.prop, method="NMDS", distance="wunifrac")
+ord.nmds.wunifrac
+
+# 20 iterations were sufficient to reach a convergent solution, and the stress is below 0.2 (at or above would be considered suspect), so two dimensions are sufficient.
+
+ # Plot ordination
+plot_ordination(ps3, ord.nmds.wunifrac, color="Diet", shape="Genotype", title="Weighted UniFrac") +
+  scale_shape_manual(values=c(21, 24)) +
+  scale_color_manual(values=c("#E69F00", "#56B4E9")) +
+  geom_point(aes(fill=Treatment), size=3, stroke=1.5) +
+  scale_fill_manual(values=c("grey47", "white")) +
+  guides(fill = guide_legend(override.aes = list(shape = 21)))
+
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/BetaDiversity_WeightedUniFrac.pdf")
+
+# Test for significant differences by factor
+wUni.dist <- UniFrac(ps.prop, weighted=TRUE, normalized=FALSE)
+vegan::adonis2(wUni.dist ~ Treatment + Diet + Genotype, data=df, permutations=999, method="wunifrac", by="margin")
+
+```
+    
+### Results: Beta diversity - Weighted UniFrac
+  
+#### *There is clear clustering of bacterial communities according to treatment and diet, but not genotype, and this is confirmed statistically. Because weighted uniFrac takes into account relative abundances, this helps to confirm that the differences associated with diet and treatment are being driven by abundant taxa.*
+  
+  
+```{r bdcleanup}
+rm(ord.nmds.bray, ord.nmds.unifrac, ord.nmds.wunifrac, BC.dist, Uni.dist, wUni.dist)
+```
+  
+  
+  
+# Specific Bacterial Taxa
+  
+## Most abundant OTUs
+
+**We can visualize the most abundant OTUs in our samples at different taxonomic levels.**
+
+```{r otufamily, fig.height=8, fig.width=10}
+# Create bar plots for most abundant OTUs at the family level
+# Because the previous analyses found no significant effects of genotype, we will separate only diet and treatment groups
+top <- names(sort(taxa_sums(ps3), decreasing=TRUE))[1:19]
+ps.top <- prune_taxa(top, ps3)
+pf <- plot_bar(ps.top, x="Subject", fill="Family") + facet_grid(~Treatment+Diet, scales="free_x") +
+  xlab(label="Subject") +
+  labs(title="Most Abundant OTUs") +
+  theme(plot.title = element_text(hjust=0.5)) +
+  geom_bar(aes(fill=Family), stat="identity", position="stack")
+pf
+
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/MostAbundantFamilies.pdf")
+```
+  
+  
+```{r otugenus, fig.height=8, fig.width=10}
+topg <- names(sort(taxa_sums(ps.prop), decreasing=TRUE))[1:10]
+ps.topg <- prune_taxa(top, ps.prop)
+
+# Many bacteria could not be idenfified at the genus level, but this is not very informative for our graph. We can remove the NA genus for graphing
+topgtax <- data.frame(tax_table(ps.top))
+ps.topg <- prune_taxa(topgtax$Genus != "NA", ps.top)
+
+# Create bar plots for top OTUs at the genus level (other than NA)
+pg <- plot_bar(ps.topg, x="Subject", fill="Genus") +
+  facet_grid(~Treatment+Diet, scales="free_x") +
+  xlab(label="Subject") +
+  labs(title="Most Abundant OTUs") +
+  theme(plot.title = element_text(hjust=0.5)) +
+  geom_bar(aes(fill=Genus), stat="identity", position="stack")
+pg
+
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/MostAbundantGenera.pdf")
+```
+  
+### Results: Most Abundant OTUs
+  
+#### *Visual evaluation of these plots suggests that* Bacteroides *taxa are far more abundant in XPro-treated mice.*
+  
+  
+## Differential Abundance (DESeq2)
+  
+**We can determine whether the relative abundances of individual taxa differ by experimental group. We will utilize the ```DESeq2``` package in accordance with the practices outlined in McMurdie and Holmes et al 2014 (PMID: 24699258).**
+  
+### Differential Abundance by Treatment
+
+```{r deseqdataset}
+# Remove taxa with counts of 5 or fewer in the whole data set to avoid making too many comparisons which aren't really meaningful.
+ps3p <- prune_taxa(taxa_sums(ps3) > 5, ps3) 
+
+# Ensure that Treatment is a factor with two levels, Saline and XPro, and that XPro is considered the "treatment" for reporting fold changes
+# Ensure that Diet is a factor with two levels, CD and HFHF, in that order.
+sample_data(ps3p)$Treatment <- factor(sample_data(ps3p)$Treatment, levels=c("Saline", "XPro"))
+sample_data(ps3p)$Diet <- factor(sample_data(ps3p)$Diet, levels=c("CD", "HFHS"))
+
+# Convert phyloseq object to deseq data set
+# The last variable in the formula is the one that will be used to calculate fold changes
+# Variables to the left of the last one will be taken into account when calculating effects of the primary variable
+# Again, we will leave out genotype due to limited representation of both genotypes in all experimental groups and lack of significant effects of genotype found earlier in the analysis
+dds <- phyloseq_to_deseq2(ps3p, ~ Diet + Treatment)
+
+# Ensure that Saline is considered the reference level for reporting fold changes
+dds$Treatment <- relevel(dds$Treatment, ref = "Saline")
+dds$Diet <- relevel(dds$Treatment, ref = "CD")
+
+dds
+```
+
+```{r deseq2}
+# Differential abundance testing
+dsdds <- DESeq(dds)
+
+# Generate results
+res = results(dsdds, alpha=0.05)
+
+# Add annotation from taxonomy table
+resan <- cbind(as.data.frame(res), as.matrix(tax_table(ps3p)[rownames(res),]))
+
+# Sort by p-value
+resan <- resan[order(resan$padj),]
+
+# Remove row names
+resan2 <- resan
+rownames(resan2) = NULL
+
+# Select taxa with padj < 0.05
+sigtab <- resan2[which(resan2$padj < 0.05),]
+
+dim(sigtab)
+summary(sigtab)
+
+# Export table of significant results
+write.csv(sigtab, "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_TaxaSig05_Treatment_accntDiet.csv")
+```
+  
+*We will visualize the changes in the taxa identified as differing significantly in abundance with XPro treatment. Each subdivision of a bar represents a different OTU (asv) within the genus or family, and the plots are ordered top to bottom according to the adjusted p value with the lowest at the top of the plot.*
+
+```{r deseq2barplotgenus, fig.height=9, fig.width=8}
+# Reverse order the taxa according to adjusted p-value so they will be in the right order in the flipped plot
+sigtab$Genus <- as.character(sigtab$Genus)
+sigtab$Genus <- factor(sigtab$Genus, levels=unique(sigtab$Genus))
+sigtab$Genus <- fct_rev(sigtab$Genus)
+
+# Plot the log2 fold changes in taxa which differ significantly between the treatments.
+ggplot(sigtab[!is.na(sigtab$Genus),], aes(x=Genus, y=log2FoldChange, fill=Genus)) +
+  geom_bar(stat="identity", color="black") +
+  coord_flip() +
+  ggtitle("Differentially Abundant Bacteria by Treatment") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position="none") +
+  geom_hline(yintercept=0, color="black", size=1)
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_TaxaSig05Genus_Treatment_accntDiet_barplot.pdf", width=8, height=9)
+```
+  
+*We can plot by family as well. This is not quite as informative as plotting by genus because often, taxa within a family change in abundance in both directions by treatment. We will include it, however, because there are several taxa for which a genus could not be identified, and those are left off of the image plotted by genus.* 
+  
+```{r deseq2barplotfamily, fig.height=5.5, fig.width=8}
+# Reverse order the taxa according to adjusted p-value so they will be in the right order in the flipped plot
+sigtab$Family <- as.character(sigtab$Family)
+sigtab$Family <- factor(sigtab$Family, levels=unique(sigtab$Family))
+sigtab$Family <- fct_rev(sigtab$Family)
+
+# Plot the log2 fold changes in taxa which differ significantly between the treatments.
+ggplot(sigtab[!is.na(sigtab$Family),], aes(x=Family, y=log2FoldChange, fill=Family)) +
+  geom_bar(stat="identity", color="black") +
+  coord_flip() +
+  ggtitle("Differentially Abundant Bacteria by Treatment") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position="none") +
+  geom_hline(yintercept=0, color="black", size=1)
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_TaxaSig05Family_Treatment_accntDiet_barplot.pdf", width=8, height=5.5)
+```
+  
+*Let's hone in on some of those phyla with significant changes in both directions using a phylogenetic tree. Each point beside a limb tip represents an individual subject. This will provide us with a view of the phylogenetic relatedness of particular OTUs within each family.*  
+  
+```{r deseq2tree, fig.width=13, fig.height=9}
+# Let's prune our phyloseq object to the taxa identified by differential abundance testing
+ps4 <- prune_taxa(taxa_names(ps3p) %in% rownames(resan[which(resan$padj < 0.05),]), ps3p)
+ps4
+
+# transform data to proportions to show relative abundance
+ps4.prop <- transform_sample_counts(ps4, function(otu) otu/sum(otu))
+
+ps4Bac <- subset_taxa(ps4.prop, Family=="Bacteroidaceae")
+plot_tree(ps4Bac, shape="Treatment", color="Diet", size="abundance", label.tips="Species", base.spacing=0.03, title="Bacteroidaceae Family (Genus Bacteroides)")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_Bacteroidaceae_Treatmentphytree.pdf", width=8, height=4)
+
+ps4Rum <- subset_taxa(ps4.prop, Family=="Ruminococcaceae")
+plot_tree(ps4Rum, shape="Treatment", color="Diet", size="abundance", label.tips="Genus", base.spacing=0.02, title="Ruminococcaceae Family ")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_Ruminococcaceae_Treatmentphytree.pdf", width=13, height=7)
+
+ps4Mur <- subset_taxa(ps4.prop, Family=="Muribaculaceae")
+plot_tree(ps4Mur, shape="Treatment", color="Diet", size="abundance", label.tips="Genus", base.spacing=0.1, title="Muribaculaceae Family ")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_Muribaculaceae_Treatmentphytree.pdf", width=8, height=5)
+
+ps4Lach <- subset_taxa(ps4.prop, Family=="Lachnospiraceae")
+plot_tree(ps4Lach, shape="Treatment", color="Diet", size="abundance", label.tips="Genus", base.spacing=0.08, title="Lachnospiraceae Family")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_Lachnospiraceae_Treatmentphytree.pdf", width=8, height=9)
+
+ps4Clost <- subset_taxa(ps4.prop, Family=="Clostridiales_vadinBB60_group")
+plot_tree(ps4Clost, shape="Treatment", color="Diet", size="abundance", base.spacing=0.02, title="Clostridiales_vadinBB60_group Family")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_ClostridialesBB60_Treatmentphytree.pdf", width=8, height=9)
+```
+  
+*We will plot the relative abundance of individual genera identified as differing significantly with XPro treatment (with diet accounted for). Each subdivision of the bar represents a different sample, and the height of each subdivision represents the relative abundance of the genus within that sample.*
+ 
+```{r deseq2barplotv}
+# Agglomerate taxa by genus
+ps4g <- tax_glom(ps4.prop, taxrank=rank_names(ps4.prop)[6])
+
+# Because there are so many taxa to plot, separate them to create images of reasonable size
+# Because Bacteroides are so abundant compared to everything else, they get an image all to themselves
+siggensort <- names(sort(taxa_sums(ps4g), decreasing=TRUE))
+most1 <- siggensort[1]
+more10 <- siggensort[2:11]
+less11 <- siggensort[12:22]
+least11 <- siggensort[23:33]
+
+ps4g1 <- prune_taxa(most1, ps4g)
+ps4g2 <- prune_taxa(more10, ps4g)
+ps4g3 <- prune_taxa(less11, ps4g)
+ps4g4 <- prune_taxa(least11, ps4g)
+
+# Plot the relative abundance of the taxa
+plot_bar(ps4g1, "Treatment", fill="Diet") +
+  facet_grid(~Genus) +
+  ggtitle("Differentially Abundant Bacteria") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position="right")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_Bacteroides_Treatment_accntDiet_barplotvert.pdf", height=5, width=3)
+
+plot_bar(ps4g2, "Treatment", fill="Diet") +
+  facet_grid(~Genus) +
+  ggtitle("Differentially Abundant Bacteria") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position="right")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_Genus2_Treatment_accntDiet_barplotvert.pdf", height=5, width=23)
+
+plot_bar(ps4g3, "Treatment", fill="Diet") +
+  facet_grid(~Genus) +
+  ggtitle("Differentially Abundant Bacteria") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position="right")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_Genus3_Treatment_accntDiet_barplotvert.pdf", height=5, width=23)
+
+plot_bar(ps4g4, "Treatment", fill="Diet") +
+  facet_grid(~Genus) +
+  ggtitle("Differentially Abundant Bacteria") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position="right")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByTreatment/DESEQ2_Genus4_Treatment_accntDiet_barplotvert.pdf", height=5, width=24)
+```
+    
+### Results: Differential Abundance by Treatment
+  
+#### *After accounting for diet, the relative abundance of 124 OTUs (asvs actually, but people are more familiar with the term OTU) belonging to 32 classified genera and 18 classified families were found to differ significantly with XPro treatment. Some notable differences in XPro-treated mice included greater abundances of 3 OTUS in genus* Bacteroides *and 2 OTUs in* Delsulfovibrio *and lesser abundances of numerous OTUs within* Ruminococcaceae *UCG-014 and* Lachnospiraceae *NK4A136 group. Other OTUs within the Lachnospiraceae family were more abundant in XPro-treated mice. Two OTUs in the Muribaculaceae family were more abundant in XPro-treated mice, while the majority were less abundant. Phylogenetic trees indicate that more closely related OTUs were more likely to be similarly regulated by XPro treatment.* Bifidobacterium *was less abundant in XPro-treated mice, but this appears to be driven by mice on control diet, as abundance of this genus in HFHF diet was low.*
+  
+  
+### Differential Abundance by Diet
+
+```{r deseqdataset2}
+# Convert phyloseq object to deseq data set
+# The last variable in the formula is the one that will be used to calculate fold changes
+# Variables to the left of the last one will be taken into account when calculating effects of the primary variable
+# Again, we will leave out genotype due to limited representation of both genotypes in all experimental groups and lack of significant effects of genotype found earlier in the analysis
+dds <- phyloseq_to_deseq2(ps3p, ~ Treatment + Diet)
+
+dds
+```
+
+```{r deseq22}
+# Differential abundance testing
+dsdds <- DESeq(dds)
+
+# Generate results
+res = results(dsdds, alpha=0.05)
+
+# Add annotation from taxonomy table
+resan <- cbind(as.data.frame(res), as.matrix(tax_table(ps3p)[rownames(res),]))
+
+# Sort by p-value
+resan <- resan[order(resan$padj),]
+
+# Remove row names
+resan2 <- resan
+rownames(resan2) = NULL
+
+# Select taxa with padj < 0.05
+sigtab <- resan2[which(resan2$padj < 0.05),]
+
+dim(sigtab)
+
+# Export table of significant results
+write.csv(sigtab, "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/DESEQ2_TaxaSig05_Diet_accntTreatment.csv")
+```
+  
+*We will visualize the changes in the taxa identified as differing significantly in abundance with HFHF diet. Each subdivision of a bar represents a different OTU (asv) within the genus or family, and the plots are ordered top to bottom according to the adjusted p value with the lowest at the top of the plot.*
+
+```{r deseq2barplotgenus2, fig.height=6, fig.width=8}
+# Reverse order the taxa according to adjusted p-value so they will be in the right order in the flipped plot
+sigtab$Genus <- as.character(sigtab$Genus)
+sigtab$Genus <- factor(sigtab$Genus, levels=unique(sigtab$Genus))
+sigtab$Genus <- fct_rev(sigtab$Genus)
+
+# Plot the log2 fold changes in taxa which differ significantly between the treatments.
+ggplot(sigtab[!is.na(sigtab$Genus),], aes(x=Genus, y=log2FoldChange, fill=Genus)) +
+  geom_bar(stat="identity", color="black") +
+  coord_flip() +
+  ggtitle("Differentially Abundant Bacteria by Diet") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position="none") +
+  geom_hline(yintercept=0, color="black", size=1)
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/DESEQ2_TaxaSig05Genus_Diet_accntTreatment_barplot.pdf", width=8, height=6)
+```
+  
+*We can plot by family as well. This is often not quite as informative as plotting by genus because often, taxa within a family change in abundance in both directions by treatment. We will include it, however, because there are several taxa primarily belonging to the Muribaculaceae and Lachnospiraceae families for which a genus could not be identified, and those are left off of the image plotted by genus.* 
+  
+```{r deseq2barplotfamily2, fig.height=4.6, fig.width=8}
+# Reverse order the taxa according to adjusted p-value so they will be in the right order in the flipped plot
+sigtab$Family <- as.character(sigtab$Family)
+sigtab$Family <- factor(sigtab$Family, levels=unique(sigtab$Family))
+sigtab$Family <- fct_rev(sigtab$Family)
+
+# Plot the log2 fold changes in taxa which differ significantly between the treatments.
+ggplot(sigtab[!is.na(sigtab$Family),], aes(x=Family, y=log2FoldChange, fill=Family)) +
+  geom_bar(stat="identity", color="black") +
+  coord_flip() +
+  ggtitle("Differentially Abundant Bacteria by Diet") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position="none") +
+  geom_hline(yintercept=0, color="black", size=1)
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/DESEQ2_TaxaSig05Family_Diet_accntTreatment_barplot.pdf", width=8, height=4.6)
+```
+  
+*Let's hone in on some of those taxa with significant changes in both directions using a phylogenetic tree. Each point beside a limb tip represents an individual subject. This will provide us with a view of the phylogenetic relatedness of particular OTUs within each family.*  
+  
+```{r deseq2tree2, fig.width=10, fig.height=7}
+# Let's prune our phyloseq object to the taxa identified by differential abundance testing
+ps4 <- prune_taxa(taxa_names(ps3p) %in% rownames(resan[which(resan$padj < 0.05),]), ps3p)
+ps4
+
+ps4Lach <- subset_taxa(ps4, Family=="Lachnospiraceae")
+plot_tree(ps4Lach, shape="Treatment", color="Diet", size="abundance", label.tips="Genus", base.spacing=0.05, title="Lachnospiraceae Family ")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/DESEQ2_Lachnospiraceae_Dietphytree.pdf", width=8, height=7)
+
+ps4Rum <- subset_taxa(ps4, Family=="Ruminococcaceae")
+plot_tree(ps4Rum, shape="Treatment", color="Diet", size="abundance", label.tips="Genus", base.spacing=0.02, title="Ruminococcaceae Family ")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/DESEQ2_Ruminococcaceae_Dietphytree.pdf", width=10, height=5)
+
+ps4Mur <- subset_taxa(ps4, Family=="Muribaculaceae")
+plot_tree(ps4Mur, shape="Treatment", color="Diet", size="abundance", label.tips="Genus", base.spacing=0.15, title="Muribaculaceae Family ")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/DESEQ2_Muribaculaceae_Dietphytree.pdf", width=7, height=4)
+
+
+```
+  
+*We will plot the relative abundance of individual genera identified as differing significantly with HFHF diet (with treatment accounted for). Each subdivision of the bar represents a different sample, and the height of each subdivision represents the relative abundance of the genus within that sample.*
+ 
+```{r deseq2barplotv2}
+# Agglomerate taxa by genus
+ps4g <- tax_glom(ps4, taxrank=rank_names(ps4)[6])
+
+# Because there are so many taxa to plot, separate them to create images of reasonable size
+siggensort <- names(sort(taxa_sums(ps4g), decreasing=TRUE))
+more10 <- siggensort[1:10]
+less10 <- siggensort[11:20]
+
+ps4g1 <- prune_taxa(more10, ps4g)
+ps4g2 <- prune_taxa(less10, ps4g)
+
+# Plot the relative abundance of the taxa
+plot_bar(ps4g1, "Treatment", fill="Diet") +
+  facet_grid(~Genus) +
+  ggtitle("Differentially Abundant Bacteria") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position="right")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/DESEQ2_Genus1_Diet_accntTreatment_barplotvert.pdf", height=5, width=23)
+
+plot_bar(ps4g2, "Treatment", fill="Diet") +
+  facet_grid(~Genus) +
+  ggtitle("Differentially Abundant Bacteria") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position="right")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/DESEQ2_Genus2_Diet_accntTreatment_barplotvert.pdf", height=5, width=22)
+
+# Desulfovibrionaceae is not annotated at the genus level. Let's plot it at the family level.
+ps4Des <- subset_taxa(ps4, Family=="Desulfovibrionaceae")
+plot_bar(ps4Des, "Treatment", fill="Diet") +
+  facet_grid(~Family) +
+  ggtitle("Differentially Abundant Bacteria") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position="right")
+ggsave("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/Part2_Phyloseq_figs/DifferByDiet/DESEQ2_Desulfovibrionaceae_Diet_accntTreatment_barplotvert.pdf", height=5, width=3)
+```
+    
+### Results: Differential Abundance by Diet
+  
+#### *After accounting for treatment, the relative abundance of 57 OTUs (asvs actually, but people are more familiar with the term OTU) belonging to 20 classified genera and 14 classified phyla were found to differ significantly with HFHF diet. Some notable differences in HFHF diet mice included reduced relative abundances of Desulfovibrionaceae (primarily in Saline-treated mice) and* Bifidobacterium *and increased abundance of* Akkermansia*. There were substantial changes in relative abundances of taxa in the Lachnospiraceae family, with some OTUs increasing and others decreasing in abundance. Many taxa in the Muribaculaceae family decreased in abundance with HFHF diet while* Muribaculum *increased. In the Ruminococcaceae family, two OTUs including* Flavonifractor *increased in abundance with HFHF diet while many others decreased. Phylogenetic trees indicate that more closely related OTUs were more likely to be similarly regulated by HFHF diet.*
+  
+```{r deseqcleanup}
+rm(dds, dsdds, pf, pg, ps.top, ps.topg, ps3p, ps4, ps4Bac, ps4Des, ps4g, ps4g1, ps4g2, ps4g3, ps4g4, ps4Lach, ps4Mur, ps4Rum, res, resan, resan2, sigtab, topgtax, least11, less10, less11, more10, most1, siggensort, top, topg)
+```
+  
+  
+  
+# Functional Predictions from 16S Sequencing Data
+
+**We submitted an OTU abundance table and a representative sequence file (generated in part 1 of this analysis) to the online tool Piphillin which predicts genomic function based on 16S sequencing data (https://doi.org/10.1371/journal.pone.0166104). The results include a raw KEGG ortholog pathway abundance table, a raw KEGG ortholog abundance table (based on the Oct18 KEGG reference database, 99% identity threshold), and a raw rxn abundance table (based on the BioCyc 22.5 reference database, 99% identity threshold). We will evaluate these data to determine whether any features are differentially abundant between the two timepoints in this study.**
+
+First, we need to get our data tables into the appropriate format for analysis with DESeq2 (built for differential expression analysis based on negative binomial distribution).
+  
+```{r pitblfrmt}
+ctspko <- read.delim("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/ko_pathway_abund_table_unnorm.txt", row.names="Pathway")
+ctsko <- read.delim("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/ko_abund_table_unnorm.txt", row.names="feature")
+ctsrxn <- read.delim("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_biocycPiphillin/rxn_abund_table_unnorm.txt", row.names="feature")
+
+# Make sample names consistent with those in the phyloseq sample data document
+names(ctspko) <- names(ctspko) %>%  str_replace("X", "") %>% str_replace_all("\\.", "-")
+names(ctsko) <- names(ctsko) %>%  str_replace("X", "") %>% str_replace_all("\\.", "-")
+names(ctsrxn) <- names(ctsrxn) %>%  str_replace("X", "") %>% str_replace_all("\\.", "-")
+
+# Remove negative and positive controls from tables
+# Remove poor quality sample from tables
+which(names(ctspko)=="Positive-1")
+ctspko <- ctspko[,-c(33:36)] %>% select(-(contains("359-1-25-18")))
+ctsko <- ctsko[,-c(33:36)] %>% select(-(contains("359-1-25-18")))
+ctsrxn <- ctsrxn[,-c(33:36)] %>% select(-(contains("359-1-25-18")))
+
+# Round number to nearest integer because DESeq2 takes count data as input
+ctspko <- round(ctspko, digits=0)
+ctsko <- round(ctsko, digits=0)
+ctsrxn <- round(ctsrxn, digits=0)
+
+# Convert to matrix
+ctspko <- as.matrix(ctspko)
+ctsko <- as.matrix(ctsko)
+ctsrxn <- as.matrix(ctsrxn)
+```
+
+We also need to create a metadata table with information about the samples. The sample names must be in the same order as they are in the counts matrix.
+```{r picoldata}
+coldata <- data.frame(sample_data(ps3)[,1:4])
+coldata$Treatment <- factor(coldata$Treatment, levels=c("Saline", "XPro"))
+coldata$Diet <- factor(coldata$Diet, levels=c("CD", "HFHS"))
+all(rownames(coldata) == colnames(ctspko))
+all(rownames(coldata) == colnames(ctsko))
+all(rownames(coldata) == colnames(ctsrxn))
+```
+
+## Differential Functional Predictions by Treatment
+
+Now we create DESeqDataSets to compare treatments while taking diet into account.
+```{r pideseqdataset}
+ddspko <- DESeqDataSetFromMatrix(countData = ctspko,
+                              colData = coldata,
+                              design = ~ Diet + Treatment)
+ddsko <- DESeqDataSetFromMatrix(countData = ctsko,
+                              colData = coldata,
+                              design = ~ Diet + Treatment)
+ddsrxn <- DESeqDataSetFromMatrix(countData = ctsrxn,
+                              colData = coldata,
+                              design = ~ Diet + Treatment)
+
+ddspko
+ddsko
+ddsrxn
+```
+
+We will do some minor pre-filtering to exclude features/pathways that were only identified in a very few samples and at very low counts.
+```{r deseq2prefilter}
+ddspko <- ddspko[rowSums(counts(ddspko)) >= 10,]
+ddsko <- ddsko[rowSums(counts(ddsko)) >= 10,]
+ddsrxn <- ddsrxn[rowSums(counts(ddsrxn)) >= 10,]
+
+ddspko
+ddsko
+ddsrxn
+```
+
+Now we can identify differentially abundant features/pathways between the treatments.
+```{r pideseq2}
+# differential abundance testing
+ddspko <- DESeq(ddspko)
+ddsko <- DESeq(ddsko)
+ddsrxn <- DESeq(ddsrxn)
+
+# Results generation
+respko <- results(ddspko, alpha=0.05)
+resko <- results(ddsko, alpha=0.05)
+resrxn <- results(ddsrxn, alpha=0.05)
+
+respko
+resko
+resrxn
+
+# Sort by p-value
+respko <- respko[order(respko$pvalue),]
+resko <- resko[order(resko$pvalue),]
+resrxn <- resrxn[order(resrxn$pvalue),] 
+
+# Summarize results
+summary(respko)
+summary(resko)
+summary(resrxn)
+```
+#### *Significant (adjusted p-value < 0.05) increases in 26 KEGG pathways and decreases in 31 KEGG pathways were predicted with XPro treatment. Significant increases in 186 KEGG orthologs and a significant decrease in 534 KEGG orthologs were predicted with XPro treatment. A significant increase in 327 reactions from the BioCyc database and a significant decrease in 204 reactions from the BioCyc database was predicted with XPro treatment.*
+
+We will export the list of features that differ between the treatments.
+```{r pideseq2sigdif}
+respkoSig <- subset(respko, padj < 0.05)
+reskoSig <- subset(resko, padj < 0.05)
+resrxnSig <- subset(resrxn, padj < 0.05)
+
+
+write.csv(as.data.frame(respkoSig), "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/DifferByTreatment/PKO_Sig05.csv")
+
+write.csv(as.data.frame(reskoSig), "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/DifferByTreatment/KO_Sig05.csv")
+
+write.csv(as.data.frame(resrxnSig), "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_biocycPiphillin/DifferByTreatment/RXN_Sig05.csv")
+
+# KEGG pathways in exported document were identified using the KEGG PATHWAY database (https://www.genome.jp/kegg/pathway.html).
+
+# KEGG orthologs in exported document were identified using the KEGG ORTHOLOGY database (https://www.genome.jp/kegg/ko.html).
+## KOs were copied from the site into a column of the spreadsheet, KO numbers removed, and [] around the phrase "acyl-carrier-protein" and "NiFe" were replaced with parentheses.
+
+# Detailed information on BioCyc reactions can be found in the BioCyc Database Collection (https://biocyc.org/).
+
+
+# Import significant KO list with KOs annotated.
+reskoSig1 <- read.csv("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/DifferByTreatment/KO_Sig05_an.csv", row.names=1)
+
+# Improve formatting of annotation for KO list
+reskoSig1$X.1 <- as.character(reskoSig1$X.1)
+reskoSig1$Name <- sapply(strsplit(reskoSig1$X.1, ";"), "[", 1)
+reskoSig1$Definition <- sapply(strsplit(reskoSig1$X.1, "; "), "[", 2)
+reskoSig1$Enzyme_Class <- sapply(strsplit(reskoSig1$Definition, "\\["), "[", 2)
+reskoSig1$Definition <- sapply(strsplit(reskoSig1$Definition, "\\["), "[", 1)
+reskoSig1$Enzyme_Class <- reskoSig1$Enzyme_Class %>% str_replace("EC:", "") %>%  str_replace("\\]", "")
+
+reskoSig1 <- reskoSig1 %>% select(-X.1)
+
+write.csv(as.data.frame(reskoSig1), "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/DifferByTreatment/KO_Sig05_Annotated.csv")
+```
+
+We can visualize the differentially abundant features.
+```{r piMAplots, fig.width=5}
+# Plot the log2 fold changes attributable to a given variable over the mean of counts for all the samples
+# Red color indicates adjusted p-value < 0.05
+# Points which fall out of the window are plotted as open triangles pointing either up or down.
+plotMA(respko, alpha=0.05, ylim=c(-3,4), xlab="Mean Counts", main="Differentially Abundant KEGG Pathways by Treatment")
+
+plotMA(resko, alpha=0.05, ylim=c(-10,8), xlab="Mean Counts", main="Differentially Abundant KEGG Orthologs by Treatment")
+
+plotMA(resrxn, alpha=0.05, ylim=c(-8,8), xlab="Mean Counts", main="Differentially Abundant BioCyc Reactions by Treatment")
+```
+  
+## Differential Functional Predictions by Diet
+
+Now we create DESeqDataSets to compare diets while taking treatment into account.
+```{r pideseqdataset2}
+ddspko <- DESeqDataSetFromMatrix(countData = ctspko,
+                              colData = coldata,
+                              design = ~ Treatment + Diet)
+ddsko <- DESeqDataSetFromMatrix(countData = ctsko,
+                              colData = coldata,
+                              design = ~ Treatment + Diet)
+ddsrxn <- DESeqDataSetFromMatrix(countData = ctsrxn,
+                              colData = coldata,
+                              design = ~ Treatment + Diet)
+
+ddspko
+ddsko
+ddsrxn
+```
+
+We will do some minor pre-filtering to exclude features/pathways that were only identified in a very few samples and at very low counts.
+```{r deseq2prefilter2}
+ddspko <- ddspko[rowSums(counts(ddspko)) >= 10,]
+ddsko <- ddsko[rowSums(counts(ddsko)) >= 10,]
+ddsrxn <- ddsrxn[rowSums(counts(ddsrxn)) >= 10,]
+
+ddspko
+ddsko
+ddsrxn
+```
+
+Now we can identify differentially abundant features/pathways between the diets.
+```{r pideseq22}
+# differential abundance testing
+ddspko <- DESeq(ddspko)
+ddsko <- DESeq(ddsko)
+ddsrxn <- DESeq(ddsrxn)
+
+# Results generation
+respko <- results(ddspko, alpha=0.05)
+resko <- results(ddsko, alpha=0.05)
+resrxn <- results(ddsrxn, alpha=0.05)
+
+respko
+resko
+resrxn
+
+# Sort by p-value
+respko <- respko[order(respko$pvalue),]
+resko <- resko[order(resko$pvalue),]
+resrxn <- resrxn[order(resrxn$pvalue),] 
+
+# Summarize results
+summary(respko)
+summary(resko)
+summary(resrxn)
+```
+#### *Significant (adjusted p-value < 0.05) increases in 16 KEGG pathways and decreases in 12 KEGG pathways were predicted with HFHF diet. Significant increases in 79 KEGG orthologs and a significant decrease in 146 KEGG orthologs were predicted with HFHF diet. A significant increase in 157 reactions from the BioCyc database and a significant decrease in 169 reactions from the BioCyc database was predicted with HFHF diet.*
+
+We will export the list of features that differ between the treatments.
+```{r pideseq2sigdif2}
+respkoSig <- subset(respko, padj < 0.05)
+reskoSig <- subset(resko, padj < 0.05)
+resrxnSig <- subset(resrxn, padj < 0.05)
+
+
+write.csv(as.data.frame(respkoSig), "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/DifferByDiet/PKO_Sig05.csv")
+
+write.csv(as.data.frame(reskoSig), "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/DifferByDiet/KO_Sig05.csv")
+
+write.csv(as.data.frame(resrxnSig), "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_biocycPiphillin/DifferByDiet/RXN_Sig05.csv")
+
+# KEGG pathways in exported document were identified using the KEGG PATHWAY database (https://www.genome.jp/kegg/pathway.html).
+
+# KEGG orthologs in exported document were identified using the KEGG ORTHOLOGY database (https://www.genome.jp/kegg/ko.html).
+## KOs were copied from the site into a column of the spreadsheet, KO numbers removed, and [] around the phrases "acyl-carrier protein", "protein-PII", and "glutamine synthetase" were replaced with parentheses.
+
+# Detailed information on BioCyc reactions can be found in the BioCyc Database Collection (https://biocyc.org/).
+
+
+# Import significant KO list with KOs annotated.
+reskoSig1 <- read.csv("C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/DifferByDiet/KO_Sig05_an.csv", row.names=1)
+
+# Improve formatting of annotation for KO list
+reskoSig1$X.1 <- as.character(reskoSig1$X.1)
+reskoSig1$Name <- sapply(strsplit(reskoSig1$X.1, ";"), "[", 1)
+reskoSig1$Definition <- sapply(strsplit(reskoSig1$X.1, "; "), "[", 2)
+reskoSig1$Enzyme_Class <- sapply(strsplit(reskoSig1$Definition, "\\["), "[", 2)
+reskoSig1$Definition <- sapply(strsplit(reskoSig1$Definition, "\\["), "[", 1)
+reskoSig1$Enzyme_Class <- reskoSig1$Enzyme_Class %>% str_replace("EC:", "") %>%  str_replace("\\]", "")
+
+reskoSig1 <- reskoSig1 %>% select(-X.1)
+
+write.csv(as.data.frame(reskoSig1), "C:/Users/mecho/Documents/TANSEY_LAB/RAnalyses/Mary/5xFAD microbiome/Analysis/MoreTrim/PiphillinResults/20200810201312__Madelyn_Houser_keggPiphillin/DifferByDiet/KO_Sig05_Annotated.csv")
+```
+
+We can visualize the differentially abundant features.
+```{r piMAplots2, fig.width=5}
+# Plot the log2 fold changes attributable to a given variable over the mean of counts for all the samples
+# Red color indicates adjusted p-value < 0.05
+# Points which fall out of the window are plotted as open triangles pointing either up or down.
+plotMA(respko, alpha=0.05, ylim=c(-3,4), xlab="Mean Counts", main="Differentially Abundant KEGG Pathways by Treatment")
+
+plotMA(resko, alpha=0.05, ylim=c(-10,8), xlab="Mean Counts", main="Differentially Abundant KEGG Orthologs by Treatment")
+
+plotMA(resrxn, alpha=0.05, ylim=c(-8,8), xlab="Mean Counts", main="Differentially Abundant BioCyc Reactions by Treatment")
+```
+  
+  
+```{r piphillincleanup}
+rm(ctsko, ctspko, ctsrxn, ddsko, ddspko, ddsrxn, resko, reskoSig, reskoSig1, respko, resrxn, resrxnSig, respkoSig)
+```
+
