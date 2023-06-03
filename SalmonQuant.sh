@@ -4,6 +4,9 @@
 #
 # Aligning and quantifying with salmon
 # 
+# Transcript to gene needs to be made for import with tximport
+# zcat file.gtf.gz | awk -F '\t' '$3 == "transcript" { split($9, a, "\""); print a[2] "," a[10] }' > tx2gene.csv
+# I have to test that code to see if it works
 
 
 cd ../Data
