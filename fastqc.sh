@@ -4,7 +4,10 @@
 #
 # performs a fastqc analysis of all of my files
 #
+# Asks the user for the number of folder to be named. I was doing a couple of 
+# runs and testing things out, so I got a pile of folders with fastqc analysis.
 #
+# Second prompt, which folder needs to be analyzed. 
 
 
 # move to where the data will  handled
