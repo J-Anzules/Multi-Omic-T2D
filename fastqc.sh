@@ -8,6 +8,7 @@
 # runs and testing things out, so I got a pile of folders with fastqc analysis.
 #
 # Second prompt, which folder needs to be analyzed. 
+# Output: fastqc report for each file in the named folder
 
 
 # move to where the data will  handled
