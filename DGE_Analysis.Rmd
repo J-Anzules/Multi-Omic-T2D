@@ -114,6 +114,25 @@ head(results, n = 10)
 
 ```{r}
 
+# This still needs to be properly tested:
+# THis will automatically pull the ensembl gene description to save
+
+# Load the biomaRt package
+library(biomaRt)
+
+# Connect to the Ensembl database
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+# Define the gene identifiers for which you want to retrieve descriptions
+gene_ids <- rownames(results)
+
+# Retrieve the gene descriptions using biomaRt
+gene_data <- getBM(attributes = c("ensembl_gene_id", "description"), filters = "ensembl_gene_id", values = gene_ids, mart = ensembl)
+
+# Save the gene data to a CSV file
+write.csv(gene_data, "gene_descriptions.csv", row.names = FALSE)
+
+
 ```
 
 
