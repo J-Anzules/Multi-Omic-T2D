@@ -1,0 +1,55 @@
+---
+title: "DGE_Analysis"
+output: html_document
+date: "2023-06-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd("/Users/jonan/Documents/Tyseq/Code/") #All file locations will have a relative directionality in the file tree. 
+```
+
+```{r}
+# Generating the tx2gene 
+library(GenomicFeatures)
+#You have to set the working directory to where the code is at
+
+txdb <- makeTxDbFromGFF("../Data/hg19/gencode.v19.chr_patch_hapl_scaff.annotation.gtf")
+keytypes(txdb)
+k <- keys(txdb, keytype = "TXNAME")
+tx2gene <- select(txdb, k, "GENEID", "TXNAME")
+
+```
+
+```{r setting samples}
+# Setting up files for upload
+# "../Data/SalmonQuant/quantALL/"
+control_files = c("../Data/SalmonQuant/quantALL/1_XIN460_NHI_ATTACT_L005_R1_001_quant.sf", 
+                  "../Data/SalmonQuant/quantALL/2_XGM061_NHI_TCCGGA_L005_R1_001_quant.sf",
+                  "../Data/SalmonQuant/quantALL/3_XJL334_NHI_CGCTCA_L005_R1_001_quant.sf",
+                  "../Data/SalmonQuant/quantALL/4_ZCA126_NHI_GAGATT_L005_R1_001_quant.sf",
+                  "../Data/SalmonQuant/quantALL/5_XGZ492_NHI_ATTCAG_L005_R1_001_quant.sf")
+
+T1D_files = c("../Data/SalmonQuant/quantALL/6_AAFS251_T2DHI_GAATTC_L005_R1_001_quant.sf",
+              "../Data/SalmonQuant/quantALL/7_AAJ2482_T2DHI_CTGAAG_L005_R1_001_quant.sf",
+              "../Data/SalmonQuant/quantALL/8_AABW178_T2DHI_TAATGC_L005_R1_001_quant.sf",
+              "../Data/SalmonQuant/quantALL/9_XIX456_T2DHI_CGGCTA_L005_R1_001_quant.sf",
+              "../Data/SalmonQuant/quantALL/10_ABDG032_T2DHI_TCCGCG_L005_R1_001_quant.sf")
+
+# Creating a sample table that maps each sample to its corresponding quant.sf file
+sample_table <- data.frame(
+  sampleName = c("XIN460_C", "XGM061_C", "XJL334_C", "ZCA126_C", "XGZ492_C",
+                 "AAFS251_D", "AAJ2482_D", "AABW178_D", "XIX456_D", "ABDG032_D"),
+  fileName = c(control_files, T1D_files),
+  diabetes_status = c(rep("No", 5), rep("Yes", 5))
+)
+
+```
+
+
+```{r}
+
+```
+
+
