@@ -8,9 +8,11 @@ date: "2023-06-09"
 knitr::opts_chunk$set(echo = TRUE)
 
 setwd("/Users/jonan/Documents/Tyseq/Code/") #All file locations will have a relative directionality in the file tree. 
+library(tximport)
+library(DESeq2)
 ```
 
-```{r}
+```{r tx2gene}
 # Generating the tx2gene 
 library(GenomicFeatures)
 #You have to set the working directory to where the code is at
@@ -19,10 +21,12 @@ txdb <- makeTxDbFromGFF("../Data/hg19/gencode.v19.chr_patch_hapl_scaff.annotatio
 keytypes(txdb)
 k <- keys(txdb, keytype = "TXNAME")
 tx2gene <- select(txdb, k, "GENEID", "TXNAME")
+tx2gene <- as.data.frame(tx2gene)
+tx2gene <- tx2gene[, c("TXNAME", "GENEID")]
 
 ```
 
-```{r setting samples}
+```{r sample setup}
 # Setting up files for upload
 # "../Data/SalmonQuant/quantALL/"
 control_files = c("../Data/SalmonQuant/quantALL/1_XIN460_NHI_ATTACT_L005_R1_001_quant.sf", 
@@ -49,7 +53,25 @@ sample_table <- data.frame(
 
 
 ```{r}
-
+txi <- tximport(files = sample_table$fileName, type = "salmon", tx2gene = tx2gene, ignoreAfterBar = TRUE) 
+head(txi)
 ```
 
+```{r}
+#Trying to figure out what is wrong with the tx2gene file
+
+quant <- read.delim("../Data/SalmonQuant/quantALL/1_XIN460_NHI_ATTACT_L005_R1_001_quant.sf", stringsAsFactors = FALSE)
+head(quant)
+
+transcript_id <- "ENST00000335137.3"
+is_present <- transcript_id %in% tx2gene$TXNAME
+
+if (is_present) {
+  print("Transcript ID is present in tx2gene mapping.")
+} else {
+  print("Transcript ID is not found in tx2gene mapping.")
+}
+```
+
+head(tx2gene)
 
