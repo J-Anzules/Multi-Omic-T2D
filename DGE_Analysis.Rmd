@@ -54,7 +54,13 @@ sample_table <- data.frame(
 
 ```{r}
 txi <- tximport(files = sample_table$fileName, type = "salmon", tx2gene = tx2gene, ignoreAfterBar = TRUE) 
-head(txi)
+
+counts <- round(txi$counts)
+columnData <- data.frame(condition = sample_table$diabetes_status)
+dds <- DESeqDataSetFromMatrix(countData = counts, colData = columnData, design = ~condition) # ~condition is what tells it that I am interested in seeing the relationships based on condition
+
+columnData
+counts
 ```
 
 ```{r}
