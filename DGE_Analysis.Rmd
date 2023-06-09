@@ -53,23 +53,77 @@ sample_table <- data.frame(
 ```
 
 
-```{r}
+```{r Count Matrix}
 txi <- tximport(files = sample_table$fileName, type = "salmon", tx2gene = tx2gene, ignoreAfterBar = TRUE) 
 
 counts <- round(txi$counts)
 columnData <- data.frame(condition = sample_table$diabetes_status)
 dds <- DESeqDataSetFromMatrix(countData = counts, colData = columnData, design = ~condition) # ~condition is what tells it that I am interested in seeing the relationships based on condition
 
+#Adding the right column names to the dds object
 colnames(dds) <- sample_table$sampleName
-# countsf
+# colnames(dds)
+# dds$condition - These should match with colnames(dds); they do.
+```
+
+```{r Sanity check}
+# Checking to see that the right columns are associated to the right patient ID
+
+# Get the column names from DESeq object
+col_names = colnames(dds)
+
+# Get the patient IDs from the sample table
+patient_ids <- sample_table$sampleName
+
+# Compare the column names with the sample name
+# If match 
+match_result <- match(col_names, patient_ids)
+
+match_result
+
+# Print the results
+for (i in seq_along(col_names)) {
+  cat("Column:", col_names[i], " - SampleName ID:", patient_ids[match_result[i]], "\n")
+}
+
+```
+
+```{r DGE analysis}
+#Normalizing the counts
+# Estimated size factors are determined by the library size
+dds <- estimateSizeFactors(dds) 
+
+# Differential gene expression analysis
+dds <- DESeq(dds)
+
+# Getting the results based on the condition of diabetes or not
+results <- results(dds, contrast = c("condition", "Yes", "No"))
+
+
+top_genes <- results[order(results$pvalue), ]
+top_10_genes <- head(top_genes, n=10)
+
+write.csv(top_10_genes, file = "../Data/to_10_genes.csv")
 ```
 
 ```{r}
-colnames(dds)
+# Pulling out the results
+head(results, n = 10)
+
 ```
+
 ```{r}
-dds$condition
+
 ```
+
+
+
+
+
+
+
+
+
 
 
 
