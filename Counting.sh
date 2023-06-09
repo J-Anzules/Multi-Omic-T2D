@@ -15,7 +15,7 @@
 
 
 # move to where the data will  handled
-cd /mnt/c/Users/jonan/Documents/Tyseq/Data
+cd ../Data
 
 # Prompt user for the name of the folder with data that needs to be aligned
 echo "Enter the name of the folder containing the files to be aligned:"
@@ -31,6 +31,7 @@ read cores
 
 # Making the outputfolder
 mkdir "$output_folder"
+
 
 for file in "${input_folder}"/*.sam 
     do

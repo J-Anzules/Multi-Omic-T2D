@@ -8,17 +8,16 @@ date: "2023-06-09"
 knitr::opts_chunk$set(echo = TRUE)
 
 setwd("/Users/jonan/Documents/Tyseq/Code/") #All file locations will have a relative directionality in the file tree. 
-library(tximport)
-library(DESeq2)
+library(tximport) # Importing salmon files and preparing for deseq
+library(DESeq2) # DGE Analysis
+library(GenomicFeatures) # Generating the tx2gene 
+
 ```
 
 ```{r tx2gene}
-# Generating the tx2gene 
-library(GenomicFeatures)
-#You have to set the working directory to where the code is at
 
 txdb <- makeTxDbFromGFF("../Data/hg19/gencode.v19.chr_patch_hapl_scaff.annotation.gtf")
-keytypes(txdb)
+# keytypes(txdb)
 k <- keys(txdb, keytype = "TXNAME")
 tx2gene <- select(txdb, k, "GENEID", "TXNAME")
 tx2gene <- as.data.frame(tx2gene)
@@ -42,6 +41,8 @@ T1D_files = c("../Data/SalmonQuant/quantALL/6_AAFS251_T2DHI_GAATTC_L005_R1_001_q
               "../Data/SalmonQuant/quantALL/10_ABDG032_T2DHI_TCCGCG_L005_R1_001_quant.sf")
 
 # Creating a sample table that maps each sample to its corresponding quant.sf file
+# _C = control
+# _D = Diabetic
 sample_table <- data.frame(
   sampleName = c("XIN460_C", "XGM061_C", "XJL334_C", "ZCA126_C", "XGZ492_C",
                  "AAFS251_D", "AAJ2482_D", "AABW178_D", "XIX456_D", "ABDG032_D"),
@@ -59,25 +60,22 @@ counts <- round(txi$counts)
 columnData <- data.frame(condition = sample_table$diabetes_status)
 dds <- DESeqDataSetFromMatrix(countData = counts, colData = columnData, design = ~condition) # ~condition is what tells it that I am interested in seeing the relationships based on condition
 
-columnData
-counts
+colnames(dds) <- sample_table$sampleName
+# countsf
 ```
 
 ```{r}
-#Trying to figure out what is wrong with the tx2gene file
-
-quant <- read.delim("../Data/SalmonQuant/quantALL/1_XIN460_NHI_ATTACT_L005_R1_001_quant.sf", stringsAsFactors = FALSE)
-head(quant)
-
-transcript_id <- "ENST00000335137.3"
-is_present <- transcript_id %in% tx2gene$TXNAME
-
-if (is_present) {
-  print("Transcript ID is present in tx2gene mapping.")
-} else {
-  print("Transcript ID is not found in tx2gene mapping.")
-}
+colnames(dds)
+```
+```{r}
+dds$condition
 ```
 
-head(tx2gene)
+
+
+
+
+
+
+
 
