@@ -103,13 +103,15 @@ results <- results(dds, contrast = c("condition", "Yes", "No"))
 top_genes <- results[order(results$pvalue), ]
 top_10_genes <- head(top_genes, n=10)
 
+top_10_genes
+
 write.csv(top_10_genes, file = "../Data/to_10_genes.csv")
 ```
 
 ```{r}
 # Pulling out the results
-head(results, n = 10)
-
+a = head(results, n = 10)
+tail(a, n = 10)
 ```
 
 ```{r}
