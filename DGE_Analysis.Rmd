@@ -90,8 +90,11 @@ for (i in seq_along(col_names)) {
 
 ```{r DGE analysis}
 #Normalizing the counts
+
 # Estimated size factors are determined by the library size
 dds <- estimateSizeFactors(dds) 
+
+# dds$sizeFactor - Pretty cool to see the different relative sizer factors - Need to read about this
 
 # Differential gene expression analysis
 dds <- DESeq(dds)
@@ -100,13 +103,51 @@ dds <- DESeq(dds)
 results <- results(dds, contrast = c("condition", "Yes", "No"))
 
 
-top_genes <- results[order(results$pvalue), ]
+top_genes <- results[order(results$padj), ]
 top_10_genes <- head(top_genes, n=10)
 
 top_10_genes
 
 write.csv(top_10_genes, file = "../Data/to_10_genes.csv")
 ```
+```{r DGE analysis}
+#Normalizing the counts
+
+# Estimated size factors are determined by the library size
+dds <- estimateSizeFactors(dds) 
+
+# dds$sizeFactor - Pretty cool to see the different relative sizer factors - Need to read about this
+
+# Differential gene expression analysis
+dds <- DESeq(dds)
+
+# Getting the results based on the condition of diabetes or not
+results <- results(dds, contrast = c("condition", "Yes", "No"))
+
+
+top_genes <- results[order(results$padj), ]
+top_30_genes <- head(top_genes, n=30)
+
+top_30_genes
+
+write.csv(top_30_genes, file = "../Data/top_30_genes.csv")
+```
+
+```{r}
+# Checking to see the what differences is if I sort by smallest p-values and the
+# greatest absolute value in log2foldchange
+
+results
+
+# Sort results by absolute log2FC in descending order
+sorted_results <- results[order(abs(results$log2FoldChange), decreasing = TRUE), ]
+
+# Print the sorted results
+print(sorted_results)
+
+```
+
+
 
 ```{r}
 # Pulling out the results
