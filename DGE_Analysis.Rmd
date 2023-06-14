@@ -172,6 +172,8 @@ gene_ids <- rownames(results)
 # Grabbing the first ten for testing
 gene_ids = gene_ids[1:10]
 
+
+### THIS IS WHERE IT DOESNT WORK ###
 # Retrieve the gene descriptions using biomaRt
 gene_data <- getBM(attributes = c("ensembl_gene_id", "description"), filters = "ensembl_gene_id", values = gene_ids, mart = ensembl)
 
