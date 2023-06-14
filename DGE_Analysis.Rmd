@@ -4,6 +4,15 @@ output: html_document
 date: "2023-06-09"
 ---
 
+**Introduction**
+
+This file does a couple of things:
+ - Prepares all of the relevant metadata data into a table
+ - Prepares a transcript to gene mapping of for importing salmon files
+ - tximport - imports the salmon quant.sf files into count matrix needed for DESeq
+ - deseq - Next we used DESeq2 to do the differential gene expression analysis 
+
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
