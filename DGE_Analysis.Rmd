@@ -12,6 +12,8 @@ This file does a couple of things:
  - tximport - imports the salmon quant.sf files into count matrix needed for DESeq
  - deseq - Next we used DESeq2 to do the differential gene expression analysis 
 
+Future Steps
+Automate the acquisition of gene descriptions based on the gene ID
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
