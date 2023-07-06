@@ -25,7 +25,7 @@ for file in trimmed_fastq/*.fastq.gz
     mkdir ${output_dir}
 
     echo "$basename"
-    Run Salmon to align and quantify the reads
+    #Run Salmon to align and quantify the reads
     salmon quant \
         -i hg19/hg19_salmon/ \
         -l A \
