@@ -29,6 +29,7 @@ for file in trimmed_fastq/*.fastq.gz
     salmon quant \
         -i hg19/hg19_salmon/ \
         -l A \
+        --gcBias \
         -r "${file}" \
         -p 25 \
         -o "${output_dir}"
