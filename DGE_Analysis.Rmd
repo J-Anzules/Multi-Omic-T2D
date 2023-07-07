@@ -142,7 +142,7 @@ top_30_genes <- head(top_genes, n=30)
 
 top_30_genes
 
-write.csv(top_30_genes, file = "../Data/top_30_genes.csv")
+write.csv(top_30_genes, file = "../Data/top_30_genes_2.csv")
 ```
 
 ```{r}
@@ -197,9 +197,82 @@ write.csv(gene_data, "gene_descriptions.csv", row.names = FALSE)
 ```
 
 
+# Checking to see which are different
+
+```{r}
+library(dplyr)
+dfA = read.csv("../Data/top_30_genes.csv")
+dfB = read.csv("../Data/top_30_genes_2.csv")
 
 
+# Find values in dfA that are not present in dfB
+values_only_in_dfA <- anti_join(dfA, dfB, by = "EnsembleID")
 
+# Find values in dfB that are not present in dfA
+values_only_in_dfB <- anti_join(dfB, dfA, by = "EnsembleID")
+
+values_only_in_dfA
+values_only_in_dfB
+
+```
+
+
+#Volcano plot
+```{r}
+library(ggplot2)
+
+
+# Assuming you have the DESeq results stored in the variable 'results'
+
+# Convert DESeqResults object to data frame
+results_df <- as.data.frame(results)
+
+# Calculate the negative log10 of the adjusted p-values
+results_df$neg_log10_padj <- -log10(results_df$padj)
+
+# Create a volcano plot
+ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_padj)) +
+  geom_point(color = "grey", alpha = 0.6) +
+  geom_point(data = subset(results_df, padj < 0.05 & abs(log2FoldChange) > 1),
+             color = "red", alpha = 0.6) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
+  labs(x = "log2 Fold Change", y = "-log10(adjusted p-value)",
+       title = "Volcano Plot") +
+  theme_bw()
+
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming you have a DESeqResults object called 'deseq_results'
+
+# Convert DESeqResults to a data frame
+results_df <- as.data.frame(results)
+
+results_df$EnsembleID <- rownames(results_df)
+# Create the volcano plot
+volcano_plot <- ggplot(results_df, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point() +
+  xlim(c(-max(abs(results_df$log2FoldChange)), max(abs(results_df$log2FoldChange)))) +
+  ylim(c(0, max(-log10(results_df$padj)))) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
+  xlab("log2 Fold Change") +
+  ylab("-log10(adjusted p-value)") +
+  ggtitle("Volcano Plot")
+
+# Add labels to significantly differentially expressed genes
+signif_labels <- subset(results_df, padj < 0.05)
+volcano_plot_with_labels <- volcano_plot +
+  geom_text(data = signif_labels, aes(label = EnsembleID), vjust = 0, hjust = 0)
+
+# Print the volcano plot with labels
+print(volcano_plot_with_labels)
+
+
+```
 
 
 
