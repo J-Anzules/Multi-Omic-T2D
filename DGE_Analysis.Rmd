@@ -394,6 +394,7 @@ pvalue_cutoff <- 0.05
 results$significant <- ifelse(results$padj < pvalue_cutoff, "Yes", "No")
 
 # Create the volcano plot with interactive tooltips for Ensemble ID
+# There is something wrong with the color selection
 volcano_plot <- plot_ly(data = results, x = ~log2FoldChange, y = ~-log10(padj), 
                         color = ~significant, colors = list("Yes" = "red", "No" = "black")) %>%
   add_markers(size = 5, alpha = 0.6, hoverinfo = "text",
