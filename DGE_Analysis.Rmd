@@ -87,7 +87,26 @@ dds <- DESeq(dds)
 
 # Getting the results based on the condition of diabetes or not
 results <- results(dds, contrast = c("condition", "Yes", "No"))
+
+#Adding the Gene names to the results
+
+# Extract gene names from tx2gene object based on EnsembleIDs in the results dataframe
+gene_names <- select(tx2gene, keys = rownames(results), columns = "GENEID")$GENEID
+
+# Add the gene names as a new column in the results dataframe
+results$GeneName <- gene_names
+
+# Remove the row names
+rownames(results) <- NULL
+
+# Print the updated results dataframe with gene names as a column
+print(results)
+
 ```
+```{r Checking out the resutls}
+
+```
+
 
 ```{r Sanity check}
 # Checking to see that the right columns are associated to the right patient ID
@@ -410,6 +429,11 @@ volcano_plot <- plot_ly(data = results, x = ~log2FoldChange, y = ~-log10(padj),
 output_file <- "../Figures/interactive_volcano_plot2.html"
 htmlwidgets::saveWidget(volcano_plot, file = output_file)
 
+```
+
+#Pathway Enrichment analysis (GSEA)
+```{r}
+head(results)
 ```
 
 
