@@ -1,5 +1,6 @@
 ---
 title: "DGE_Analysis"
+author: "Jonathan Anzules"
 output: html_document
 date: "2023-06-09"
 ---
@@ -24,6 +25,13 @@ library(tximport) # Importing salmon files and preparing for deseq
 library(DESeq2) # DGE Analysis
 library(GenomicFeatures) # Generating the tx2gene 
 library(ggplot2)
+library(tidyr)
+library(tidyverse)
+library(fgsea) # pathway enrichment analysis
+library(biomaRt) # Converting ensembleID to geneID
+library(data.table)
+library(plotly)
+library(dplyr)
 ```
 # Data Prep
 ```{r tx2gene}
@@ -32,13 +40,15 @@ txdb <- makeTxDbFromGFF("../Data/hg19/gencode.v19.chr_patch_hapl_scaff.annotatio
 # keytypes(txdb)
 k <- keys(txdb, keytype = "TXNAME")
 
-tx2gene <- select(txdb, k, "GENEID", "TXNAME")
+tx2gene <- select(txdb, k, "GENEID", "TXNAME") # only works om 4.3.0
 tx2gene <- as.data.frame(tx2gene)
 tx2gene <- tx2gene[, c("TXNAME", "GENEID")]
 
 ```
+
 ```{r sample setup}
 # Setting up files for upload
+
 # "../Data/SalmonQuant/quantALL/"
 control_files = c("../Data/SalmonQuant/quantALL/1_XIN460_NHI_ATTACT_L005_R1_001_quant.sf", 
                   "../Data/SalmonQuant/quantALL/2_XGM061_NHI_TCCGGA_L005_R1_001_quant.sf",
@@ -65,22 +75,21 @@ sample_table <- data.frame(
 ```
 
 ```{r Count Matrix to Results}
+# import salmon abundance counts into an r data ckass that can be used by desseq
 txi <- tximport(files = sample_table$fileName, type = "salmon", tx2gene = tx2gene, ignoreAfterBar = TRUE) 
 counts <- round(txi$counts)
 columnData <- data.frame(condition = sample_table$diabetes_status)
+
 dds <- DESeqDataSetFromMatrix(countData = counts, colData = columnData, design = ~condition) # ~condition is what tells it that I am interested in seeing the relationships based on condition
 
 #Adding the right column names to the dds object
 colnames(dds) <- sample_table$sampleName
-# colnames(dds)
 # dds$condition - These should match with colnames(dds); they do.
 
-#Normalizing the counts
+## Normalizing the counts
 
 # Estimated size factors are determined by the library size
 dds <- estimateSizeFactors(dds)
-
-# dds$sizeFactor - Pretty cool to see the different relative sizer factors - Need to read about this
 
 # Differential gene expression analysis
 dds <- DESeq(dds)
@@ -88,22 +97,29 @@ dds <- DESeq(dds)
 # Getting the results based on the condition of diabetes or not
 results <- results(dds, contrast = c("condition", "Yes", "No"))
 
-#Adding the Gene names to the results
-
-# Extract gene names from tx2gene object based on EnsembleIDs in the results dataframe
-gene_names <- select(tx2gene, keys = rownames(results), columns = "GENEID")$GENEID
-
-# Add the gene names as a new column in the results dataframe
-results$GeneName <- gene_names
-
-# Remove the row names
-rownames(results) <- NULL
-
-# Print the updated results dataframe with gene names as a column
-print(results)
-
-```
-```{r Checking out the resutls}
+# # Moving rownames to a column
+# results$EnsembleID <- rownames(results)
+# results = as.data.frame(results)
+# 
+# # Extract gene names from tx2gene object based on EnsembleIDs in the results dataframe
+# merged_results <- merge(tx2gene, results, by.x = "TXNAME", by.y = "EnsembleID", all.y = TRUE)
+# 
+# 
+# colnames(tx2gene)
+# colnames(results)
+# 
+# gene_names <- select(tx2gene, keys = rownames(results), columns = "GENEID")$GENEID
+# class(tx2gene)
+# class(results)
+# 
+# # Add the gene names as a new column in the results dataframe
+# results$GeneName <- gene_names
+# 
+# # Remove the row names
+# rownames(results) <- NULL
+# 
+# # Print the updated results dataframe with gene names as a column
+# # print(results)
 
 ```
 
@@ -154,11 +170,13 @@ write.csv(top_10_genes, file = "../Data/to_10_genes.csv")
 
 
 ```
+
+
 ```{r DGE analysis}
 # #Normalizing the counts
 # 
 # # Estimated size factors are determined by the library size
-# dds <- estimateSizeFactors(dds) 
+# dds <- estimateSizeFactors(dds)
 # 
 # # dds$sizeFactor - Pretty cool to see the different relative sizer factors - Need to read about this
 # 
@@ -167,14 +185,14 @@ write.csv(top_10_genes, file = "../Data/to_10_genes.csv")
 # 
 # # Getting the results based on the condition of diabetes or not
 # results <- results(dds, contrast = c("condition", "Yes", "No"))
-# 
-# 
-# top_genes <- results[order(results$padj), ]
-# top_30_genes <- head(top_genes, n=30)
-# 
-# top_30_genes
-# 
-# write.csv(top_30_genes, file = "../Data/top_30_genes_2.csv")
+
+
+top_genes <- results[order(results$padj), ]
+top_30_genes <- head(top_genes, n=30)
+
+top_30_genes
+
+write.csv(top_30_genes, file = "../Data/top_30_genes_2.csv")
 ```
 
 ```{r p-values vs log2foldchange}
@@ -191,36 +209,9 @@ print(sorted_results)
 
 ```
 
-```{r - Ensembl gene description}
-
-# This still needs to be properly tested:
-# This will automatically pull the ensembl gene description to save
-
-# Load the biomaRt package
-library(biomaRt)
-
-# Connect to the Ensembl database
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-
-# Define the gene identifiers for which you want to retrieve descriptions
-gene_ids <- rownames(results)
-
-# Grabbing the first ten for testing
-gene_ids = gene_ids[1:10]
-
-
-### THIS IS WHERE IT DOESNT WORK ###
-# Retrieve the gene descriptions using biomaRt
-gene_data <- getBM(attributes = c("ensembl_gene_id", "description"), filters = "ensembl_gene_id", values = gene_ids, mart = ensembl)
-
-gene_data
-# Save the gene data to a CSV file
-write.csv(gene_data, "gene_descriptions.csv", row.names = FALSE)
-
-
-```
-
 ```{r - Identifying Differences}
+# I updated salmon to the most up to date version and used the gcbias flag - _2
+
 library(dplyr)
 dfA = read.csv("../Data/top_30_genes.csv")
 dfB = read.csv("../Data/top_30_genes_2.csv")
@@ -237,7 +228,7 @@ values_only_in_dfB
 
 ```
 #Volcano plot
-```{r -  Plot No label}
+```{r -  Plot No label - adjusted p value}
 # Results generated in Data Prep
 results_df <- as.data.frame(results)
 
@@ -248,6 +239,25 @@ results_df$neg_log10_padj <- -log10(results_df$padj)
 ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_padj)) +
   geom_point(color = "grey", alpha = 0.6) +
   geom_point(data = subset(results_df, padj < 0.05 & abs(log2FoldChange) > 1),
+             color = "red", alpha = 0.6) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
+  labs(x = "log2 Fold Change", y = "-log10(adjusted p-value)",
+       title = "Volcano Plot") +
+  theme_bw()
+```
+
+```{r -  Plot No label - p value}
+# Results generated in Data Prep
+results_df <- as.data.frame(results)
+
+# Calculate the negative log10 of the adjusted p-values
+results_df$neg_log10_pvalue <- -log10(results_df$pvalue)
+
+# Create a volcano plot
+ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_pvalue)) +
+  geom_point(color = "grey", alpha = 0.6) +
+  geom_point(data = subset(results_df, pvalue < 0.05 & abs(log2FoldChange) > 1),
              color = "red", alpha = 0.6) +
   geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
@@ -285,7 +295,7 @@ print(volcano_plot_with_labels)
 
 ```
 
-```{r}
+```{r labeled plot}
 library(ggplot2)
 library(broom)
 library(plotly)
@@ -325,7 +335,6 @@ print(interactive_volcano_plot)
 ```
 
 ```{r}
-# Assuming you have the plotly library loaded and your data in 'results_df'
 
 # Convert 'padj' column to numeric
 results$padj <- as.numeric(results$padj)
@@ -352,7 +361,8 @@ htmlwidgets::saveWidget(volcano_plot, file = "../Figures/interactive_volcano_plo
 
 
 ```
-```{r}
+
+```{r html figure}
 # Load necessary libraries
 library(plotly)
 library(dplyr)
@@ -402,10 +412,6 @@ htmlwidgets::saveWidget(list(data = plotly_json), file = output_file)
 ```
 
 ```{r}
-# Load necessary libraries
-library(plotly)
-library(dplyr)
-
 # Adjusted p-value cutoff for highlighting most differentially expressed genes
 pvalue_cutoff <- 0.05
 
@@ -432,9 +438,205 @@ htmlwidgets::saveWidget(volcano_plot, file = output_file)
 ```
 
 #Pathway Enrichment analysis (GSEA)
-```{r}
-head(results)
+
+## Cleaning and Preparing data
+```{r ranka and dfGSEA generation}
+
+# Removing rows with na values in them
+results_clean <- results %>% drop_na(log2FoldChange, pvalue)
+
+# Calculating gene rankings
+results_clean <- results_clean %>% mutate(rank = log2FoldChange * -log10(pvalue))
+
+# Creating a new dataframe with the necessary columns
+dfGSEA <- results_clean %>%
+  rownames_to_column(var = "Gene_names") %>%
+  select(Gene_names, log2FC = log2FoldChange, pvalue, rank)
+
+# Removing the version number from EnsembleID using regex
+dfGSEA$Gene_names <- gsub("\\.\\d+$", "", dfGSEA$Gene_names)
 ```
+
+## Converting EnsembleID to gene ID
+
+```{r Batch processing of ensembleID}
+
+# Set up the connection to the Ensembl database
+ensembl <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+
+# Batch processing: Retrieve gene symbols for all ensemble IDs in one call
+gene_symbols <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
+                      filters = "ensembl_gene_id",
+                      values = dfGSEA$Gene_names,
+                      mart = ensembl)
+
+# Merge the gene symbols into the original dfGSEA dataframe based on ensemble IDs
+dfGSEA <- merge(dfGSEA, gene_symbols, by.x = "Gene_names", by.y = "ensembl_gene_id", all.x = TRUE)
+
+# Rename the merged column to "Gene_symbols"
+colnames(dfGSEA)[colnames(dfGSEA) == "external_gene_name"] <- "Gene_symbols"
+
+# Removing empty and NA genesymbol entries
+dfGSEA <- subset(dfGSEA, !(is.na(Gene_symbols) | Gene_symbols == ""))
+
+```
+
+```{r Saving DGE Results}
+#Saving the results top 50
+sigGenes <- subset(dfGSEA, pvalue <= 0.05)
+sigGenes <- sigGenes[order(sigGenes$pvalue),]
+
+write.csv(sigGenes, file = "../Data/SigGenes.csv")
+
+
+```
+
+
+
+## Gene Ontology enrichment analysis
+```{r picking top 30}
+# Extract gene rank and list in decreasing order for GSEA
+ranks <- as.numeric(dfGSEA$rank)
+names(ranks) <- dfGSEA$Gene_symbols
+ranks <- sort(ranks, decreasing=TRUE)
+ranks[1:30]
+```
+
+```{r loading gmt file}
+# Import .gmt file with pathway information by gene symbol (Gene sets derived from the GO Biological Process ontology)
+## Obtained from GSEA 3-6-2023 http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+go <- gmtPathways("C:/Users/jonan/Documents/Tyseq/Data/c5.go.v2023.1.Hs.symbols.gmt")
+```
+
+```{r pathfgsea}
+set.seed(06212022)
+
+fgseaRes <- fgsea(pathways = go, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+# There are dubplicate gene names
+```
+
+# Plotting Pathway Enrichment Analysis
+
+## Picking the top pathways
+
+```{r Saving and Results}
+#ssorting by pvalue
+fgseaRes <- fgseaRes[order(fgseaRes$pval), ]
+
+# Convert the lists to comma-separated strings
+fgseaRes$leadingEdge <- sapply(fgseaRes$leadingEdge, paste, collapse = ",")
+
+# Save the modified dataframe to a CSV file
+write.csv(fgseaRes, "C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings.csv", row.names = FALSE)
+
+# Read back in the table 
+EAResults <- read.csv("C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings.csv")
+
+```
+
+```{r Picking Top and up/down pathways - pvalue}
+
+# Select top 10 up and down-regulated pathways
+topup <- EAResults %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+topdown <- EAResults %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+
+
+# Write cleaned table
+write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/Top_GSEA_Pathways_GO.csv")
+
+```
+
+```{r Picking Top and up/down pathways - padj}
+
+# Select top 10 up and down-regulated pathways
+topup <- EAResults %>% filter(ES > 0)
+topup <- topup[order(topup$padj),]
+topup <- topup[1:10,]
+
+topdown <- EAResults %>% filter(ES < 0)
+topdown <- topdown[order(topdown$padj),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
+
+top <- top[order(top$padj),]
+top <- top %>% filter(padj<=0.1) %>% filter(!is.na(pathway))
+
+
+# Write cleaned table
+write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/Padj_Top_GSEA_Pathways_GO.csv")
+
+```
+
+## Ploting Results
+```{r sigpathgraphcell, fig.width=11, fig.height=3}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top %>% filter(pval <= 0.1) 
+pathg <- pathg %>% mutate(neglogpvalue = -log10(pval))
+
+if (nrow(pathg) >= 1) {
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x = reorder(pathway, neglogpvalue), y = neglogpvalue)) +
+    geom_bar(stat = "identity", fill = "black") +
+    coord_flip() +
+    scale_x_discrete(name = "Pathways Associated with Diabetes") +
+    ylab("-log(p value)") +
+    theme(axis.text.x = element_text(face = "bold", size = 10, angle = 0),
+          axis.text.y = element_text(face = "bold", size = 10, angle = 0))
+
+  pathfig
+
+  # Save the figure with increased width (e.g., width = 10 inches)
+  ggsave("C:/Users/jonan/Documents/Tyseq/Figures/pathsigfig_cts.png", width = 12)
+}
+
+```
+  
+#### Top 10 pathways
+```{r pathgraphcell, fig.width=11, fig.height=6}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top[1:10,]
+pathg <- pathg %>% filter(!is.na(pathway))
+
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+# Graph pathways by p value
+pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue)) +
+  geom_bar(stat = "identity", fill="black") +
+  coord_flip() +
+  scale_x_discrete(name="Pathways Associated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/TenPathfig_cts.png")
+```
+
+
+
+
 
 
 
