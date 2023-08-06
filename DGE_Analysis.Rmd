@@ -11,10 +11,8 @@ This file does a couple of things:
  - Prepares all of the relevant metadata data into a table
  - Prepares a transcript to gene mapping of for importing salmon files
  - tximport - imports the salmon quant.sf files into count matrix needed for DESeq
- - deseq - Next we used DESeq2 to do the differential gene expression analysis 
-
-Future Steps
-Automate the acquisition of gene descriptions based on the gene ID
+ - deseq - Next we used DESeq2 to do the differential gene expression analysis
+ - Results from deseq is used for the Gene Set Enrichment Analysis 
 
 
 ```{r setup, include=FALSE}
