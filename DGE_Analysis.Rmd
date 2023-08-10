@@ -120,6 +120,40 @@ results <- results(dds, contrast = c("condition", "Yes", "No"))
 # # print(results)
 
 ```
+```{r - DESeqDataSet to tabular data}
+
+# Extracting expression values from DESeqDataSet
+expression_values <- assay(dds, "counts")
+
+# Creating a dataframe
+gene_expression_data <- as.data.frame(expression_values)
+gene_expression_data$EnsembleID <- rownames(gene_expression_data)
+
+# Removing the version number from EnsembleID using regex
+gene_expression_data$EnsembleID <- gsub("\\.\\d+$", "", gene_expression_data$EnsembleID)
+
+## Obtaining Entrz ID
+
+# Connect to the Ensembl database using biomaRt
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+# Convert Ensemble IDs to Entrez Gene IDs
+converted_ids <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
+                       filters = "ensembl_gene_id",
+                       values = gene_expression_data$EnsembleID,
+                       mart = ensembl)
+
+# Merge the converted IDs with your gene expression data
+gene_expression_data <- merge(gene_expression_data, converted_ids, by.x = "EnsembleID", by.y = "ensembl_gene_id")
+
+# Removing empty and NA genesymbol entries
+gene_expression_data <- subset(gene_expression_data, !(is.na(external_gene_name) | external_gene_name == ""))
+
+write.csv(gene_expression_data, "../Data/ExpressionData.csv")
+
+
+```
+
 
 
 ```{r Sanity check}
@@ -453,6 +487,8 @@ dfGSEA <- results_clean %>%
 
 # Removing the version number from EnsembleID using regex
 dfGSEA$Gene_names <- gsub("\\.\\d+$", "", dfGSEA$Gene_names)
+
+write.csv(dfGSEA, "../Data/DGEdataframe.csv")
 ```
 
 ## Converting EnsembleID to gene ID
