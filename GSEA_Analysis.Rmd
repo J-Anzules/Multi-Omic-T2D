@@ -9,22 +9,213 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+## Converting EnsembleID to gene ID
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+```{r Batch processing of ensembleID}
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+# Set up the connection to the Ensembl database
+ensembl <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
 
-```{r cars}
-summary(cars)
+# Batch processing: Retrieve gene symbols for all ensemble IDs in one call
+gene_symbols <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
+                      filters = "ensembl_gene_id",
+                      values = dfGSEA$Gene_names,
+                      mart = ensembl)
+
+# Merge the gene symbols into the original dfGSEA dataframe based on ensemble IDs
+dfGSEA <- merge(dfGSEA, gene_symbols, by.x = "Gene_names", by.y = "ensembl_gene_id", all.x = TRUE)
+
+# Rename the merged column to "Gene_symbols"
+colnames(dfGSEA)[colnames(dfGSEA) == "external_gene_name"] <- "Gene_symbols"
+
+# Removing empty and NA genesymbol entries
+dfGSEA <- subset(dfGSEA, !(is.na(Gene_symbols) | Gene_symbols == ""))
+
 ```
 
-## Including Plots
+```{r Saving DGE Results}
+#Saving the results top 50
+sigGenes <- subset(dfGSEA, pvalue <= 0.05)
+sigGenes <- sigGenes[order(sigGenes$pvalue),]
 
-You can also embed plots, for example:
+write.csv(sigGenes, file = "../Data/SigGenes.csv")
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+## Gene Ontology enrichment analysis
+```{r picking top 30}
+# Extract gene rank and list in decreasing order for GSEA
+ranks <- as.numeric(dfGSEA$rank)
+names(ranks) <- dfGSEA$Gene_symbols
+ranks <- sort(ranks, decreasing=TRUE)
+ranks[1:30]
+```
+
+```{r loading gmt file}
+# Import .gmt file with pathway information by gene symbol (Gene sets derived from the GO Biological Process ontology)
+## Obtained from GSEA 3-6-2023 http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+go <- gmtPathways("C:/Users/jonan/Documents/Tyseq/Data/c5.go.v2023.1.Hs.symbols.gmt")
+```
+
+```{r pathfgsea}
+set.seed(06212022)
+
+fgseaRes <- fgsea(pathways = go, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+# There are dubplicate gene names
+```
+
+# Plotting Pathway Enrichment Analysis
+
+## Picking the top pathways
+
+```{r Saving and Results}
+#ssorting by pvalue
+fgseaRes <- fgseaRes[order(fgseaRes$pval), ]
+
+# Convert the lists to comma-separated strings
+fgseaRes$leadingEdge <- sapply(fgseaRes$leadingEdge, paste, collapse = ",")
+
+# Save the modified dataframe to a CSV file
+write.csv(fgseaRes, "C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings.csv", row.names = FALSE)
+
+# Read back in the table 
+EAResults <- read.csv("C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings.csv")
+
+```
+
+```{r Picking Top and up/down pathways - pvalue}
+
+# Select top 10 up and down-regulated pathways
+topup <- EAResults %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+topdown <- EAResults %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+
+
+# Write cleaned table
+write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/Top_GSEA_Pathways_GO.csv")
+
+```
+
+```{r Picking Top and up/down pathways - padj}
+
+# Select top 10 up and down-regulated pathways
+topup <- EAResults %>% filter(ES > 0)
+topup <- topup[order(topup$padj),]
+topup <- topup[1:10,]
+
+topdown <- EAResults %>% filter(ES < 0)
+topdown <- topdown[order(topdown$padj),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
+
+top <- top[order(top$padj),]
+top <- top %>% filter(padj<=0.1) %>% filter(!is.na(pathway))
+
+
+# Write cleaned table
+write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/Padj_Top_GSEA_Pathways_GO.csv")
+
+```
+
+## Ploting Results
+```{r sigpathgraphcell, fig.width=11, fig.height=3}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top %>% filter(pval <= 0.1) 
+pathg <- pathg %>% mutate(neglogpvalue = -log10(pval))
+
+if (nrow(pathg) >= 1) {
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x = reorder(pathway, neglogpvalue), y = neglogpvalue)) +
+    geom_bar(stat = "identity", fill = "black") +
+    coord_flip() +
+    scale_x_discrete(name = "Pathways Associated with Diabetes") +
+    ylab("-log(p value)") +
+    theme(axis.text.x = element_text(face = "bold", size = 10, angle = 0),
+          axis.text.y = element_text(face = "bold", size = 10, angle = 0))
+
+  pathfig
+
+  # Save the figure with increased width (e.g., width = 10 inches)
+  ggsave("C:/Users/jonan/Documents/Tyseq/Figures/pathsigfig_cts.png", width = 12)
+}
+
+```
+  
+#### Top 10 pathways
+```{r pathgraphcell, fig.width=11, fig.height=6}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top[1:10,]
+pathg <- pathg %>% filter(!is.na(pathway))
+
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+# Graph pathways by p value
+pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue)) +
+  geom_bar(stat = "identity", fill="black") +
+  coord_flip() +
+  scale_x_discrete(name="Pathways Associated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/TenPathfig_cts.png")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
