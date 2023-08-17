@@ -38,7 +38,7 @@ txdb <- makeTxDbFromGFF("../Data/hg19/gencode.v19.chr_patch_hapl_scaff.annotatio
 # keytypes(txdb)
 k <- keys(txdb, keytype = "TXNAME")
 
-tx2gene <- select(txdb, k, "GENEID", "TXNAME") # only works om 4.3.0
+tx2gene <- select(txdb, k, "GENEID", "TXNAME") # only works om 4.3.0 # Restart and clear output if this doesn't work
 tx2gene <- as.data.frame(tx2gene)
 tx2gene <- tx2gene[, c("TXNAME", "GENEID")]
 
@@ -72,13 +72,31 @@ sample_table <- data.frame(
 
 ```
 
-```{r Count Matrix to Results}
+```{r Loading Count Matrix and Filtering}
 # import salmon abundance counts into an r data ckass that can be used by desseq
 txi <- tximport(files = sample_table$fileName, type = "salmon", tx2gene = tx2gene, ignoreAfterBar = TRUE) 
 counts <- round(txi$counts)
+
+# Calculate the number of samples in which each gene is expressed for each group
+expressed_control <- rowSums(counts[, sample_table$diabetes_status == "No"] > 0)
+expressed_diabetes <- rowSums(counts[, sample_table$diabetes_status == "Yes"] > 0)
+
+# Filter genes based on the 80% criterion for each group
+keep_genes <- (expressed_control >= 0.8 * sum(sample_table$diabetes_status == "No")) | 
+              (expressed_diabetes >= 0.8 * sum(sample_table$diabetes_status == "Yes"))
+
+# Apply the filter to the counts matrix
+filtered_counts <- counts[keep_genes, ]
+
+
+```
+
+
+```{r DESeq differential gene expression analysis}
+
 columnData <- data.frame(condition = sample_table$diabetes_status)
 
-dds <- DESeqDataSetFromMatrix(countData = counts, colData = columnData, design = ~condition) # ~condition is what tells it that I am interested in seeing the relationships based on condition
+dds <- DESeqDataSetFromMatrix(countData = filtered_counts, colData = columnData, design = ~condition) # ~condition is what tells it that I am interested in seeing the relationships based on condition
 
 #Adding the right column names to the dds object
 colnames(dds) <- sample_table$sampleName
@@ -95,31 +113,8 @@ dds <- DESeq(dds)
 # Getting the results based on the condition of diabetes or not
 results <- results(dds, contrast = c("condition", "Yes", "No"))
 
-# # Moving rownames to a column
-# results$EnsembleID <- rownames(results)
-# results = as.data.frame(results)
-# 
-# # Extract gene names from tx2gene object based on EnsembleIDs in the results dataframe
-# merged_results <- merge(tx2gene, results, by.x = "TXNAME", by.y = "EnsembleID", all.y = TRUE)
-# 
-# 
-# colnames(tx2gene)
-# colnames(results)
-# 
-# gene_names <- select(tx2gene, keys = rownames(results), columns = "GENEID")$GENEID
-# class(tx2gene)
-# class(results)
-# 
-# # Add the gene names as a new column in the results dataframe
-# results$GeneName <- gene_names
-# 
-# # Remove the row names
-# rownames(results) <- NULL
-# 
-# # Print the updated results dataframe with gene names as a column
-# # print(results)
-
 ```
+
 ```{r - DESeqDataSet to tabular data}
 
 # Extracting expression values from DESeqDataSet
@@ -137,7 +132,7 @@ gene_expression_data$EnsembleID <- gsub("\\.\\d+$", "", gene_expression_data$Ens
 # Connect to the Ensembl database using biomaRt
 ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 
-# Convert Ensemble IDs to Entrez Gene IDs
+# Convert Ensemble IDs to ensembl_gene_id Gene IDs
 converted_ids <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
                        filters = "ensembl_gene_id",
                        values = gene_expression_data$EnsembleID,
@@ -149,7 +144,7 @@ gene_expression_data <- merge(gene_expression_data, converted_ids, by.x = "Ensem
 # Removing empty and NA genesymbol entries
 gene_expression_data <- subset(gene_expression_data, !(is.na(external_gene_name) | external_gene_name == ""))
 
-write.csv(gene_expression_data, "../Data/ExpressionData.csv")
+write.csv(gene_expression_data, "../Data/ExpressionData_filtered.csv")
 
 
 ```
@@ -177,47 +172,27 @@ for (i in seq_along(col_names)) {
 }
 
 ```
-# DGE Analysis
-```{r DGE analysis}
-# #Normalizing the counts
-# 
-# # Estimated size factors are determined by the library size
-# dds <- estimateSizeFactors(dds)
-# 
-# # dds$sizeFactor - Pretty cool to see the different relative sizer factors - Need to read about this
-# 
-# # Differential gene expression analysis
-# dds <- DESeq(dds)
-# 
-# # Getting the results based on the condition of diabetes or not
-# results <- results(dds, contrast = c("condition", "Yes", "No"))
+# Exploring Results
+```{r TODO: Add the gene symbols to the results df}
 
+```
+
+
+```{r top10}
+# #Normalizing the counts
 
 top_genes <- results[order(results$padj), ]
 top_10_genes <- head(top_genes, n=10)
 
 top_10_genes
 
-write.csv(top_10_genes, file = "../Data/to_10_genes.csv")
+# write.csv(top_10_genes, file = "../Data/to_10_genes.csv")
 
 
 ```
 
 
-```{r DGE analysis}
-# #Normalizing the counts
-# 
-# # Estimated size factors are determined by the library size
-# dds <- estimateSizeFactors(dds)
-# 
-# # dds$sizeFactor - Pretty cool to see the different relative sizer factors - Need to read about this
-# 
-# # Differential gene expression analysis
-# dds <- DESeq(dds)
-# 
-# # Getting the results based on the condition of diabetes or not
-# results <- results(dds, contrast = c("condition", "Yes", "No"))
-
+```{r top30}
 
 top_genes <- results[order(results$padj), ]
 top_30_genes <- head(top_genes, n=30)
@@ -260,6 +235,30 @@ values_only_in_dfB
 
 ```
 #Volcano plot
+
+```{r Volcano plot with selecting labels}
+
+# Sort by adjusted p-values and get top three entries
+top_three <- results_df[order(results_df$padj, na.last = NA)[1:3],]
+
+# Create a volcano plot
+ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_padj)) +
+  geom_point(color = "grey", alpha = 0.6) +
+  geom_point(data = subset(results_df, padj < 0.05 & abs(log2FoldChange) > 1),
+             color = "red", alpha = 0.6) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
+  # Adding the text labels for the top three points
+  geom_text(data = top_three, aes(label = rownames(top_three)), 
+            vjust = -1, hjust = 1) +
+  labs(x = "log2 Fold Change", y = "-log10(adjusted p-value)",
+       title = "Volcano Plot") +
+  theme_bw()
+
+
+```
+
+
 ```{r -  Plot No label - adjusted p value}
 # Results generated in Data Prep
 results_df <- as.data.frame(results)
@@ -277,6 +276,12 @@ ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_padj)) +
   labs(x = "log2 Fold Change", y = "-log10(adjusted p-value)",
        title = "Volcano Plot") +
   theme_bw()
+
+top_genes <- results_df[order(results_df$padj), ]
+top_10_genes <- head(top_genes, n=10)
+
+write.csv(top_genes, "../Data/topDGEGenes_filtered.csv")
+
 ```
 
 ```{r -  Plot No label - p value}
@@ -473,9 +478,10 @@ htmlwidgets::saveWidget(volcano_plot, file = output_file)
 
 ## Cleaning and Preparing data
 ```{r ranka and dfGSEA generation}
+results_df <- as.data.frame(results)
 
 # Removing rows with na values in them
-results_clean <- results %>% drop_na(log2FoldChange, pvalue)
+results_clean <- results_df %>% drop_na(log2FoldChange, pvalue)
 
 # Calculating gene rankings
 results_clean <- results_clean %>% mutate(rank = log2FoldChange * -log10(pvalue))
@@ -488,7 +494,7 @@ dfGSEA <- results_clean %>%
 # Removing the version number from EnsembleID using regex
 dfGSEA$Gene_names <- gsub("\\.\\d+$", "", dfGSEA$Gene_names)
 
-write.csv(dfGSEA, "../Data/DGEdataframe.csv")
+write.csv(dfGSEA, "../Data/DGEdataframe_filtered.csv")
 ```
 
 ## Converting EnsembleID to gene ID
@@ -520,7 +526,7 @@ dfGSEA <- subset(dfGSEA, !(is.na(Gene_symbols) | Gene_symbols == ""))
 sigGenes <- subset(dfGSEA, pvalue <= 0.05)
 sigGenes <- sigGenes[order(sigGenes$pvalue),]
 
-write.csv(sigGenes, file = "../Data/SigGenes.csv")
+write.csv(sigGenes, file = "../Data/SigGenes_filtered.csv")
 
 
 ```
@@ -565,7 +571,7 @@ fgseaRes <- fgseaRes[order(fgseaRes$pval), ]
 fgseaRes$leadingEdge <- sapply(fgseaRes$leadingEdge, paste, collapse = ",")
 
 # Save the modified dataframe to a CSV file
-write.csv(fgseaRes, "C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings.csv", row.names = FALSE)
+write.csv(fgseaRes, "C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings_filtered.csv", row.names = FALSE)
 
 # Read back in the table 
 EAResults <- read.csv("C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings.csv")
@@ -593,7 +599,7 @@ top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
 
 
 # Write cleaned table
-write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/Top_GSEA_Pathways_GO.csv")
+write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/Top_GSEA_Pathways_GO_filtered.csv")
 
 ```
 
@@ -641,10 +647,37 @@ if (nrow(pathg) >= 1) {
   pathfig
 
   # Save the figure with increased width (e.g., width = 10 inches)
-  ggsave("C:/Users/jonan/Documents/Tyseq/Figures/pathsigfig_cts.png", width = 12)
+  ggsave("C:/Users/jonan/Documents/Tyseq/Figures/pathsigfig_cts_filtered.png", width = 12)
 }
 
 ```
+```{r Plotting pathways - Red = downregulated}
+
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top %>% filter(pval <= 0.1) 
+pathg <- pathg %>% mutate(neglogpvalue = -log10(pval))
+
+if (nrow(pathg) >= 1) {
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x = reorder(pathway, neglogpvalue), y = neglogpvalue)) +
+    # Conditionally set fill color based on the "ES" value
+    geom_bar(aes(fill = ifelse(ES < 0, "red", "black")), stat = "identity") +
+    coord_flip() +
+    scale_x_discrete(name = "Pathways Associated with Diabetes") +
+    scale_fill_identity() +  # Ensure the colors are applied as specified
+    ylab("-log(p value)") +
+    theme(axis.text.x = element_text(face = "bold", size = 10, angle = 0),
+          axis.text.y = element_text(face = "bold", size = 10, angle = 0))
+
+  pathfig
+
+  # Save the figure with increased width (e.g., width = 10 inches)
+  ggsave("C:/Users/jonan/Documents/Tyseq/Figures/pathsigfig_cts_filtered_redown.png", width = 12)
+}
+
+
+```
+
   
 #### Top 10 pathways
 ```{r pathgraphcell, fig.width=11, fig.height=6}
