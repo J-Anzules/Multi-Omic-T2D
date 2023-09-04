@@ -115,7 +115,61 @@ results <- results(dds, contrast = c("condition", "Yes", "No"))
 
 ```
 
-```{r - DESeqDataSet to tabular data}
+```{r Adding GeneName to results df}
+#Rownames to a column
+results <- as.data.frame(results)
+results$EnsembleID <- rownames(results) 
+
+# Removing the version number from EnsembleID using regex
+results$EnsembleID <- gsub("\\.\\d+$", "", results$EnsembleID)
+
+## Obtaining gene ID
+
+# Connect to the Ensembl database using biomaRt
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+# Convert Ensemble IDs to ensembl_gene_id Gene IDs
+converted_ids <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
+                       filters = "ensembl_gene_id",
+                       values = results$EnsembleID,
+                       mart = ensembl)
+
+
+# Merge the converted IDs with your gene expression data
+results <- merge(results, converted_ids, by.x = "EnsembleID", by.y = "ensembl_gene_id")
+
+# Removing empty and NA genesymbol entries
+results <- subset(results, !(is.na(external_gene_name) | external_gene_name == ""))
+
+#Renaming column
+colnames(results)[colnames(results) == "external_gene_name"] <- "GeneName"
+
+#Reordering the columns
+results <- results[, c("GeneName", setdiff(names(results), "GeneName"))]
+
+# Calculate the negative log10 of the p-values for plotting
+results$neg_log10_pvalue <- -log10(results$pvalue)
+results$neg_log10_Adjpvalue <- -log10(results$padj)
+```
+
+
+```{r Saving results}
+
+# Results  from DGE analysis
+write.csv(results, "../Data/DGE_Results.csv", row.names = FALSE)
+write.csv(results, "../Data/ForReview/DESeqResults.csv", row.names = FALSE)
+
+# Saving only the significant genes based on pvalue
+sigGenes <- subset(results, pvalue <= 0.05)
+sigGenes <- sigGenes[order(sigGenes$pvalue),]
+
+write.csv(sigGenes, file = "../Data/ForReview/Ordered_Significant_Genes.csv", row.names = FALSE)
+
+
+```
+
+
+```{r - DESeqDataSet to tabular data: For Madelyn}
 
 # Extracting expression values from DESeqDataSet
 expression_values <- assay(dds, "counts")
@@ -149,8 +203,6 @@ write.csv(gene_expression_data, "../Data/ExpressionData_filtered.csv")
 
 ```
 
-
-
 ```{r Sanity check}
 # Checking to see that the right columns are associated to the right patient ID
 
@@ -172,11 +224,8 @@ for (i in seq_along(col_names)) {
 }
 
 ```
+
 # Exploring Results
-```{r TODO: Add the gene symbols to the results df}
-
-```
-
 
 ```{r top10}
 # #Normalizing the counts
@@ -190,7 +239,6 @@ top_10_genes
 
 
 ```
-
 
 ```{r top30}
 
@@ -234,37 +282,47 @@ values_only_in_dfA
 values_only_in_dfB
 
 ```
-#Volcano plot
+#Volcano plots
 
-```{r Volcano plot with selecting labels}
+```{r Volcano plot with selected labels}
 
-# Sort by adjusted p-values and get top three entries
-top_three <- results_df[order(results_df$padj, na.last = NA)[1:3],]
+#Subset top up/down regulated genes
+Upregulated_Genes <- subset(results, log2FoldChange > 0 )
+Downregualted_Genes <- subset(results, log2FoldChange < 0)
+
+# Choosing the number of top/down
+Number_of_TopnDown = 6
+
+
+# Select the top 10 upregulated and top 10 downregulated genes
+top_upregulated <- Upregulated_Genes[order(Upregulated_Genes$pvalue, na.last = NA)[1:Number_of_TopnDown],]
+top_downregulated <- Downregualted_Genes[order(Downregualted_Genes$pvalue, na.last = NA)[1:Number_of_TopnDown],]
+
+# Combine the two dataframes
+selection <- rbind(top_upregulated, top_downregulated)
 
 # Create a volcano plot
-ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_padj)) +
+volcano_plot <- ggplot(results, aes(x = log2FoldChange, y = -log10(pvalue))) +
   geom_point(color = "grey", alpha = 0.6) +
-  geom_point(data = subset(results_df, padj < 0.05 & abs(log2FoldChange) > 1),
+  geom_point(data = subset(results, pvalue < 0.05 & abs(log2FoldChange) > 1),
              color = "red", alpha = 0.6) +
   geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
-  # Adding the text labels for the top three points
-  geom_text(data = top_three, aes(label = rownames(top_three)), 
+  # Adding the text labels for the top genes
+  geom_text(data = selection, aes(label = GeneName), 
             vjust = -1, hjust = 1) +
   labs(x = "log2 Fold Change", y = "-log10(adjusted p-value)",
        title = "Volcano Plot") +
   theme_bw()
 
-
+ggsave(filename = "../Data/ForReview/volcano_top_n_down.png", plot = volcano_plot,
+       width = 10, dpi = 300)
+# write.csv(results, "../Data/ForReview/DESeqResults.csv")
 ```
-
 
 ```{r -  Plot No label - adjusted p value}
 # Results generated in Data Prep
 results_df <- as.data.frame(results)
-
-# Calculate the negative log10 of the adjusted p-values
-results_df$neg_log10_padj <- -log10(results_df$padj)
 
 # Create a volcano plot
 ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_padj)) +
@@ -285,11 +343,6 @@ write.csv(top_genes, "../Data/topDGEGenes_filtered.csv")
 ```
 
 ```{r -  Plot No label - p value }
-# Results generated in Data Prep
-results_df <- as.data.frame(results)
-
-# Calculate the negative log10 of the adjusted p-values
-results_df$neg_log10_pvalue <- -log10(results_df$pvalue)
 
 # Create a volcano plot
 ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_pvalue)) +
@@ -303,75 +356,8 @@ ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_pvalue)) +
   theme_bw()
 ```
 
-```{r - DEG labeled}
-library(ggplot2)
-
-# Convert DESeqResults to a data frame
-results_df <- as.data.frame(results)
-
-results_df$EnsembleID <- rownames(results_df)
-# Create the volcano plot
-volcano_plot <- ggplot(results_df, aes(x = log2FoldChange, y = -log10(padj))) +
-  geom_point() +
-  xlim(c(-max(abs(results_df$log2FoldChange)), max(abs(results_df$log2FoldChange)))) +
-  ylim(c(0, max(-log10(results_df$padj)))) +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
-  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
-  xlab("log2 Fold Change") +
-  ylab("-log10(adjusted p-value)") +
-  ggtitle("Volcano Plot")
-
-# Add labels to significantly differentially expressed genes
-signif_labels <- subset(results_df, padj < 0.05)
-volcano_plot_with_labels <- volcano_plot +
-  geom_text(data = signif_labels, aes(label = EnsembleID), vjust = 0, hjust = 0)
-
-# Print the volcano plot with labels
-print(volcano_plot_with_labels)
-
-
-```
-
-```{r labeled plot}
-library(ggplot2)
-library(broom)
-library(plotly)
-
-# Convert DESeqResults object to data frame
-results <- as.data.frame(results)
-
-# Convert DESeqResults to a data frame using tidy()
-# results <- tidy(deseq_results)
-
-# Add EnsembleID as a new column
-results$EnsembleID <- rownames(results)
-
-# Create the volcano plot using ggplot2
-volcano_plot <- ggplot(results, aes(x = log2FoldChange, y = -log10(padj))) +
-  geom_point() +
-  xlim(c(-max(abs(results$log2FoldChange)), max(abs(results$log2FoldChange)))) +
-  ylim(c(0, max(-log10(results$padj)))) +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
-  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
-  xlab("log2 Fold Change") +
-  ylab("-log10(adjusted p-value)") +
-  ggtitle("Volcano Plot")
-
-# Add labels to significantly differentially expressed genes
-signif_labels <- subset(results, padj < 0.05)
-volcano_plot_with_labels <- volcano_plot +
-  geom_text(data = signif_labels, aes(label = EnsembleID), vjust = 0, hjust = 0)
-
-# Convert ggplot to a plotly object
-interactive_volcano_plot <- ggplotly(volcano_plot_with_labels)
-
-# Print the interactive volcano plot
-print(interactive_volcano_plot)
-
-
-```
-
-```{r}
+## html volcano plots
+```{r html file}
 
 # Convert 'padj' column to numeric
 results$padj <- as.numeric(results$padj)
@@ -478,21 +464,15 @@ htmlwidgets::saveWidget(volcano_plot, file = output_file)
 
 ## Cleaning and Preparing data
 ```{r ranka and dfGSEA generation}
-results_df <- as.data.frame(results)
-
 # Removing rows with na values in them
-results_clean <- results_df %>% drop_na(log2FoldChange, pvalue)
+results_clean <- results %>% drop_na(log2FoldChange, pvalue)
 
 # Calculating gene rankings
 results_clean <- results_clean %>% mutate(rank = log2FoldChange * -log10(pvalue))
 
 # Creating a new dataframe with the necessary columns
 dfGSEA <- results_clean %>%
-  rownames_to_column(var = "Gene_names") %>%
-  select(Gene_names, log2FC = log2FoldChange, pvalue, rank)
-
-# Removing the version number from EnsembleID using regex
-dfGSEA$Gene_names <- gsub("\\.\\d+$", "", dfGSEA$Gene_names)
+  select(GeneName, log2FC = log2FoldChange, pvalue, rank)
 
 write.csv(dfGSEA, "../Data/DGEdataframe_filtered.csv")
 ```
@@ -501,23 +481,23 @@ write.csv(dfGSEA, "../Data/DGEdataframe_filtered.csv")
 
 ```{r Batch processing of ensembleID}
 
-# Set up the connection to the Ensembl database
-ensembl <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
-
-# Batch processing: Retrieve gene symbols for all ensemble IDs in one call
-gene_symbols <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
-                      filters = "ensembl_gene_id",
-                      values = dfGSEA$Gene_names,
-                      mart = ensembl)
-
-# Merge the gene symbols into the original dfGSEA dataframe based on ensemble IDs
-dfGSEA <- merge(dfGSEA, gene_symbols, by.x = "Gene_names", by.y = "ensembl_gene_id", all.x = TRUE)
-
-# Rename the merged column to "Gene_symbols"
-colnames(dfGSEA)[colnames(dfGSEA) == "external_gene_name"] <- "Gene_symbols"
-
-# Removing empty and NA genesymbol entries
-dfGSEA <- subset(dfGSEA, !(is.na(Gene_symbols) | Gene_symbols == ""))
+# # Set up the connection to the Ensembl database
+# ensembl <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+# 
+# # Batch processing: Retrieve gene symbols for all ensemble IDs in one call
+# gene_symbols <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
+#                       filters = "ensembl_gene_id",
+#                       values = dfGSEA$Gene_names,
+#                       mart = ensembl)
+# 
+# # Merge the gene symbols into the original dfGSEA dataframe based on ensemble IDs
+# dfGSEA <- merge(dfGSEA, gene_symbols, by.x = "Gene_names", by.y = "ensembl_gene_id", all.x = TRUE)
+# 
+# # Rename the merged column to "Gene_symbols"
+# colnames(dfGSEA)[colnames(dfGSEA) == "external_gene_name"] <- "Gene_symbols"
+# 
+# # Removing empty and NA genesymbol entries
+# dfGSEA <- subset(dfGSEA, !(is.na(Gene_symbols) | Gene_symbols == ""))
 
 ```
 
@@ -537,9 +517,8 @@ write.csv(sigGenes, file = "../Data/SigGenes_filtered.csv")
 ```{r picking top 30}
 # Extract gene rank and list in decreasing order for GSEA
 ranks <- as.numeric(dfGSEA$rank)
-names(ranks) <- dfGSEA$Gene_symbols
+names(ranks) <- dfGSEA$GeneName
 ranks <- sort(ranks, decreasing=TRUE)
-ranks[1:30]
 ```
 
 ```{r loading gmt file}
@@ -556,7 +535,6 @@ fgseaRes <- fgsea(pathways = go,
                   minSize=6,
                   maxSize=500,
                   nproc=1)
-# There are dubplicate gene names
 ```
 
 # Plotting Pathway Enrichment Analysis
