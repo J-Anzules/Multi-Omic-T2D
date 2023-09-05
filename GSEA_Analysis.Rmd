@@ -11,6 +11,7 @@ library(biomaRt) # Converting ensembleID to geneID
 library(data.table)
 library(plotly)
 library(dplyr)
+library(tidyr)
 
 results <- read.csv("../Data/DGE_Results.csv")
 ```
@@ -36,11 +37,11 @@ ranks <- sort(ranks, decreasing=TRUE)
 ```
 
 ```{r}
-# 1. Identify duplicates
+# Identify duplicates
 duplicates <- names(ranks)[duplicated(names(ranks)) | duplicated(names(ranks), fromLast = TRUE)]
 print(duplicates)
 
-# 2. Retain the highest value among duplicates
+# Retain the highest value among duplicates
 ranks_unique <- tapply(ranks, INDEX = names(ranks), FUN = max)
 ```
 
@@ -101,32 +102,7 @@ top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
 
 
 # Write cleaned table
-write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/Top_GSEA_Pathways_GO_filtered.csv")
-
-```
-
-```{r Picking Top and up/down pathways - padj}
-
-# Select top 10 up and down-regulated pathways
-topup <- fgseaRes %>% filter(ES > 0)
-topup <- topup[order(topup$padj),]
-topup <- topup[1:10,]
-
-topdown <- fgseaRes %>% filter(ES < 0)
-topdown <- topdown[order(topdown$padj),]
-topdown <- topdown[1:10,]
-
-top <- rbind(topup, rev(topdown))
-
-# Clean up pathway names
-top$pathway <- top$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
-
-top <- top[order(top$padj),]
-top <- top %>% filter(padj<=0.1) %>% filter(!is.na(pathway))
-
-
-# Write cleaned table
-write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/Padj_Top_GSEA_Pathways_GO.csv")
+# write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/Top_GSEA_Pathways_GO_filtered.csv")
 
 ```
 
@@ -152,8 +128,8 @@ if (nrow(pathg) >= 1) {
   pathfig
 
   # Save the figure with increased width (e.g., width = 10 inches)
-  ggsave("C:/Users/jonan/Documents/Tyseq/Figures/Up-Down_GO_pathways.png", width = 12)
-  ggsave("../Data/ForReview/Up-Down_GO_pathways.png", width = 12, dpi = 300)
+  # ggsave("C:/Users/jonan/Documents/Tyseq/Figures/Up-Down_GO_pathways.png", width = 12)
+  ggsave("../Data/ForReview/Up-Down_GO_pathways2.png", width = 12, dpi = 300)
 }
 
 

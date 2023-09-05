@@ -33,6 +33,7 @@ library(dplyr)
 ```
 
 ```{r unloading packages}
+# Adding this to test what is making my select() function not work
 detach(package:tximport, unload = TRUE)
 detach(package:DESeq2, unload = TRUE)
 detach(package:GenomicFeatures, unload = TRUE)
