@@ -3,6 +3,7 @@ title: "GSEA"
 author: "Jonathan Anzules"
 date: "2023-08-06"
 output:
+# Results come from the the differential analysis names: DGE_Analysis
 # Barplots of up/down regulated pathways associated to the differentially expressed genes
 ---
 
