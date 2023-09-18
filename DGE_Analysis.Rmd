@@ -93,7 +93,7 @@ sample_table <- data.frame(
 # import salmon abundance counts into an r data ckass that can be used by desseq
 txi <- tximport(files = sample_table$fileName, type = "salmon", tx2gene = tx2gene, ignoreAfterBar = TRUE) 
 counts <- round(txi$counts)
-
+dim(counts)
 # Calculate the number of samples in which each gene is expressed for each group
 expressed_control <- rowSums(counts[, sample_table$diabetes_status == "No"] > 0)
 expressed_diabetes <- rowSums(counts[, sample_table$diabetes_status == "Yes"] > 0)
@@ -105,6 +105,7 @@ keep_genes <- (expressed_control >= 0.8 * sum(sample_table$diabetes_status == "N
 # Apply the filter to the counts matrix
 filtered_counts <- counts[keep_genes, ]
 
+dim(filtered_counts)
 
 ```
 
@@ -476,4 +477,35 @@ output_file <- "../Figures/interactive_volcano_plot2.html"
 htmlwidgets::saveWidget(volcano_plot, file = output_file)
 
 ```
+
+
+# Exploring the results
+```{r}
+results <- read.csv("../Data/DGE_Results.csv")
+
+sigResults = subset(results, pvalue <= 0.05)
+PsigResults = subset(results, padj <= 0.1)
+dim(results)
+dim(sigResults)
+dim(PsigResults)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

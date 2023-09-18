@@ -63,6 +63,17 @@ fgseaRes <- fgsea(pathways = go,
                   maxSize=500,
                   nproc=1)
 ```
+##Exploring results
+```{r}
+
+
+SigPath = subset(fgseaRes, pval <= 0.05)
+pSigPath = subset(fgseaRes, padj <= 0.1)
+
+dim(SigPath)
+dim(pSigPath)
+```
+
 
 ## GO - Plotting Pathway Enrichment Analysis
 
@@ -178,12 +189,23 @@ KEGG <- gmtPathways("C:/Users/jonan/Documents/Tyseq/Data/c2.cp.kegg.v2023.1.Hs.s
 ```{r pathfgsea}
 set.seed(06212022)
 
-fgseaRes <- fgsea(pathways = KEGG, 
+fgseaRes_kegg <- fgsea(pathways = KEGG, 
                   stats = ranks_unique,
                   minSize=6,
                   maxSize=500,
                   nproc=1)
 ```
+##Exploring results
+```{r}
+
+SigPath = subset(fgseaRes_kegg, pval <= 0.05)
+pSigPath = subset(fgseaRes_kegg, padj <= 0.1)
+
+dim(SigPath)
+dim(pSigPath)
+```
+
+
 
 ## KEGG - Plotting Pathway Enrichment Analysis
 
