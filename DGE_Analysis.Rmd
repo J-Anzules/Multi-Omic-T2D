@@ -483,8 +483,8 @@ htmlwidgets::saveWidget(volcano_plot, file = output_file)
 ```{r}
 results <- read.csv("../Data/DGE_Results.csv")
 
-sigResults = subset(results, pvalue <= 0.05)
-PsigResults = subset(results, padj <= 0.1)
+sigResults = subset(results, pvalue < 0.05)
+PsigResults = subset(results, padj < 0.1)
 dim(results)
 dim(sigResults)
 dim(PsigResults)
