@@ -14,6 +14,7 @@ library(data.table)
 library(plotly)
 library(dplyr)
 library(tidyr)
+library(stringr) # for cleaning gense set names
 
 results <- read.csv("../Data/DGE_Results.csv")
 ```
@@ -31,7 +32,7 @@ dfGSEA <- results_clean %>%
   select(GeneName, log2FC = log2FoldChange, pvalue, rank)
 ```
 
-```{r picking top 30}
+```{r Ordered list}
 # Extract gene rank and list in decreasing order for GSEA
 ranks <- as.numeric(dfGSEA$rank)
 names(ranks) <- dfGSEA$GeneName
@@ -115,7 +116,7 @@ top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
 
 
 # Write cleaned table
-# write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/Top_GSEA_Pathways_GO_filtered.csv")
+write.csv(top, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/Top_GSEA_Pathways_GO_filtered.csv")
 
 ```
 
@@ -154,37 +155,13 @@ if (nrow(pathg) >= 1) {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # KEGG - Pathway Enrichment Analsys
 ```{r loading gmt file}
 # Import .gmt file with pathway information by gene symbol (Gene sets derived from the GO Biological Process ontology)
 ## Obtained from GSEA 3-6-2023 http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
 KEGG <- gmtPathways("C:/Users/jonan/Documents/Tyseq/Data/c2.cp.kegg.v2023.1.Hs.symbols.gmt")
 ```
+
 
 ```{r pathfgsea}
 set.seed(06212022)
@@ -213,13 +190,13 @@ dim(pSigPath)
 
 ```{r Saving and Results}
 #ssorting by pvalue
-fgseaRes <- fgseaRes[order(fgseaRes$pval), ]
+fgseaRes_kegg <- fgseaRes_kegg[order(fgseaRes_kegg$pval), ]
 
 # Convert the lists to comma-separated strings
-fgseaRes$leadingEdge <- sapply(fgseaRes$leadingEdge, paste, collapse = ",")
+fgseaRes_kegg$leadingEdge <- sapply(fgseaRes_kegg$leadingEdge, paste, collapse = ",")
 
 # # Save the modified dataframe to a CSV file
-# write.csv(fgseaRes, "C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings_filtered.csv", row.names = FALSE)
+# write.csv(fgseaRes_kegg, "C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings_filtered.csv", row.names = FALSE)
 # 
 # # Read back in the table 
 # EAResults <- read.csv("C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings.csv")
@@ -229,25 +206,25 @@ fgseaRes$leadingEdge <- sapply(fgseaRes$leadingEdge, paste, collapse = ",")
 ```{r Picking Top and up/down pathways - pvalue}
 
 # Select top 10 up and down-regulated pathways
-topup <- fgseaRes %>% filter(ES > 0)
+topup <- fgseaRes_kegg %>% filter(ES > 0)
 topup <- topup[order(topup$pval),]
 topup <- topup[1:10,]
 
-topdown <- fgseaRes %>% filter(ES < 0)
+topdown <- fgseaRes_kegg %>% filter(ES < 0)
 topdown <- topdown[order(topdown$pval),]
 topdown <- topdown[1:10,]
 
-top <- rbind(topup, rev(topdown))
+top_kegg <- rbind(topup, rev(topdown))
 
 # Clean up pathway names
-top$pathway <- top$pathway %>% str_replace("KEGG+?_", "") %>% str_replace_all("_", " ")
+top_kegg$pathway <- top_kegg$pathway %>% str_replace("KEGG+?_", "") %>% str_replace_all("_", " ")
 
-top <- top[order(top$pval),]
-top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+top_kegg <- top_kegg[order(top_kegg$pval),]
+top_kegg <- top_kegg %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
 
 
 # Write cleaned table
-write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/Top_GSEA_Pathways_KEGG.csv")
+# write_csv(top_kegg, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/top_kegg_GSEA_Pathways_KEGG.csv")
 
 ```
 
@@ -256,7 +233,7 @@ write_csv(top, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/Top_GSEA_Pathways_
 ```{r Plotting pathways - Red = downregulated}
 
 # Summarize pathway information and create negative log p value variable for graphing
-pathg <- top %>% filter(pval <= 0.1) 
+pathg <- top_kegg %>% filter(pval <= 0.1) 
 pathg <- pathg %>% mutate(neglogpvalue = -log10(pval))
 
 if (nrow(pathg) >= 1) {

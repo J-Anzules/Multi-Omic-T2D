@@ -14,7 +14,7 @@ This file does a couple of things:
  - deseq - Next we used DESeq2 to do the differential gene expression analysis
  - Results from deseq is used for the Gene Set Enrichment Analysis 
 
-
+# Package management
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
@@ -89,6 +89,7 @@ sample_table <- data.frame(
 
 ```
 
+# DGE Analysis
 ```{r Loading Count Matrix and Filtering}
 # import salmon abundance counts into an r data ckass that can be used by desseq
 txi <- tximport(files = sample_table$fileName, type = "salmon", tx2gene = tx2gene, ignoreAfterBar = TRUE) 
@@ -302,7 +303,51 @@ values_only_in_dfB
 ```
 #Volcano plots
 
-```{r Volcano plot with selected labels}
+```{r - Loading Data}
+# Results  from DGE analysis
+results = read.csv("../Data/DGE_Results.csv")
+
+```
+
+
+```{r - Adj p value Volcano plot with selected labels}
+
+#Subset top up/down regulated genes
+Upregulated_Genes <- subset(results, log2FoldChange > 0 )
+Downregualted_Genes <- subset(results, log2FoldChange < 0)
+
+# Choosing the number of top/down
+# Number_of_TopnDown = 6
+
+
+# Select the top 10 upregulated and top 10 downregulated genes
+top_upregulated <- Upregulated_Genes[order(Upregulated_Genes$padj, na.last = NA)[1:10],]
+top_downregulated <- Downregualted_Genes[order(Downregualted_Genes$padj, na.last = NA)[1:1],]
+
+# Combine the two dataframes
+selection <- rbind(top_upregulated, top_downregulated)
+
+# Create a volcano plot
+volcano_plot <-  ggplot(results, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(color = "grey", alpha = 0.6) +
+  geom_point(data = subset(results, padj < 0.05 & abs(log2FoldChange) > 1),
+             color = "red", alpha = 0.6) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
+  # Adding the text labels for the top genes
+  geom_text(data = selection, aes(label = GeneName), 
+            vjust = -1, hjust = 1) +
+  labs(x = "log2 Fold Change", y = "-log10(adjusted p-value)",
+       title = "Volcano Plot") +
+  theme_bw()
+
+ggsave(filename = "../Figures/volcano_adj_labeled.png", plot = volcano_plot,
+       width = 10, dpi = 300)
+
+
+```
+
+```{r - Volcano plot with selected labels}
 
 #Subset top up/down regulated genes
 Upregulated_Genes <- subset(results, log2FoldChange > 0 )
@@ -337,6 +382,7 @@ ggsave(filename = "../Data/ForReview/volcano_top_n_down.png", plot = volcano_plo
        width = 10, dpi = 300)
 # write.csv(results, "../Data/ForReview/DESeqResults.csv")
 ```
+
 
 ```{r -  Plot No label - adjusted p value}
 # Results generated in Data Prep
