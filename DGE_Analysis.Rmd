@@ -49,15 +49,17 @@ detach(package:dplyr, unload = TRUE)
 
 # Data Prep
 ```{r tx2gene}
-txdb <- makeTxDbFromGFF("../Data/hg19/gencode.v19.chr_patch_hapl_scaff.annotation.gtf")
+tx2gene <- read.csv("../Data/tx2gene.csv")
 
-# keytypes(txdb)
-k <- keys(txdb, keytype = "TXNAME")
-
-tx2gene <- select(txdb, k, "GENEID", "TXNAME") # only works om 4.3.0 # Restart and clear output if this doesn't work
-# I think code is getting confused with another select() in another package, I'm not sure which one it is yet.
-tx2gene <- as.data.frame(tx2gene)
-tx2gene <- tx2gene[, c("TXNAME", "GENEID")]
+# txdb <- makeTxDbFromGFF("../Data/hg19/gencode.v19.chr_patch_hapl_scaff.annotation.gtf")
+# 
+# # keytypes(txdb)
+# k <- keys(txdb, keytype = "TXNAME")
+# 
+# tx2gene <- AnnotationDbi::select(txdb, k, "GENEID", "TXNAME")
+# tx2gene <- as.data.frame(tx2gene)
+# tx2gene <- tx2gene[, c("TXNAME", "GENEID")]
+# write.csv(tx2gene, file = "../Data/tx2gene.csv", row.names = FALSE)
 
 ```
 
@@ -106,7 +108,7 @@ keep_genes <- (expressed_control >= 0.8 * sum(sample_table$diabetes_status == "N
 # Apply the filter to the counts matrix
 filtered_counts <- counts[keep_genes, ]
 
-dim(filtered_counts)
+# dim(filtered_counts)
 
 ```
 
@@ -132,7 +134,9 @@ dds <- DESeq(dds)
 # Getting the results based on the condition of diabetes or not
 results <- results(dds, contrast = c("condition", "Yes", "No"))
 
+# dim(results)
 ```
+
 
 ```{r Adding GeneName to results df}
 #Rownames to a column
@@ -153,12 +157,14 @@ converted_ids <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
                        values = results$EnsembleID,
                        mart = ensembl)
 
-
-# Merge the converted IDs with your gene expression data
+# Merge the converted IDs with gene expression data
 results <- merge(results, converted_ids, by.x = "EnsembleID", by.y = "ensembl_gene_id")
+  #the dimensions of results went from 15295 x 7 to 14962 x 8
+# dim(results)
 
 # Removing empty and NA genesymbol entries
 results <- subset(results, !(is.na(external_gene_name) | external_gene_name == ""))
+# dim(results)
 
 #Renaming column
 colnames(results)[colnames(results) == "external_gene_name"] <- "GeneName"
@@ -169,21 +175,31 @@ results <- results[, c("GeneName", setdiff(names(results), "GeneName"))]
 # Calculate the negative log10 of the p-values for plotting
 results$neg_log10_pvalue <- -log10(results$pvalue)
 results$neg_log10_Adjpvalue <- -log10(results$padj)
+
+
 ```
 
 
 ```{r Saving results}
 
-# Results  from DGE analysis
-write.csv(results, "../Data/DGE_Results.csv", row.names = FALSE)
-write.csv(results, "../Data/ForReview/DESeqResults.csv", row.names = FALSE)
+
+# write.csv(results, "../Data/ForReview/DESeqResults.csv", row.names = FALSE)
 
 # Saving only the significant genes based on pvalue
-sigGenes <- subset(results, pvalue <= 0.05)
-sigGenes <- sigGenes[order(sigGenes$pvalue),]
+sigGenes_p <- subset(results, pvalue <= 0.05)
+sigGenes_p <- sigGenes_p[order(sigGenes_p$pvalue),]
 
-write.csv(sigGenes, file = "../Data/ForReview/Ordered_Significant_Genes.csv", row.names = FALSE)
+# Saving only the significant genes based on pvalue
+sigGenes_padj <- subset(results, padj <= 0.1)
+sigGenes_padj <- sigGenes_padj[order(sigGenes_padj$pvalue),]
 
+dim(sigGenes_p)
+dim(sigGenes_padj)
+
+# Saving all df's
+write.csv(results, "../Data/DGE_Results.csv", row.names = FALSE)
+write.csv(sigGenes_p, file = "../Data/DEG_sig_genes-p.csv", row.names = FALSE)
+write.csv(sigGenes_padj, file = "../Data/DEG_sig_genes-adjp.csv", row.names = FALSE)
 
 ```
 

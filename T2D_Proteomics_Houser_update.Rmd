@@ -1,0 +1,1092 @@
+---
+title: "T2D_Proteomics_Houser"
+author: "Madelyn Houser"
+date: "6/7/2022"
+output: 
+  html_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+  
+# Load packages
+  
+```{r setup, message=FALSE}
+library("tidyverse")
+library("MetaboAnalystR")
+library("qs")
+library("limma")
+library("pheatmap")
+library("RColorBrewer")
+library("fgsea")
+library("data.table")
+library("readxl")
+```
+  
+  
+# Data Processing
+  
+## Load data 
+```{r FeatureTable}
+FT <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/proteomics_analysis/proteins.txt")
+
+Key <- read.csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/SampleKey.csv")
+```
+  
+  
+## Data wrangling
+  
+### Format data frame
+```{r IDs}
+# Combine mz and time into a single variable separated by underscore
+FT$mz_mz <- paste(FT$mz, FT$time, sep="_")
+FT <- FT %>% dplyr::select(mz_mz, C1, C2, C3, D1, D2, D3)
+
+# Keep only samples included in proteomics analysis in sample key
+Key$CodedID <- c("C1", NA, NA, "C2", "C3", "D2", "D3", "D1", NA, NA)
+Key <- Key %>% filter(!is.na(Key$CodedID)) %>% arrange(CodedID)
+
+# Replace coded IDs with sample IDs
+names(FT) <- c("mz_mz", Key$IIDPID)
+```
+  
+### Format sample key
+```{r key, message=FALSE}
+samkey <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/proteomics_analysis/proteins_key.csv")
+
+## Import two key files. One has the proteins with mz IDs. The other has some corrected gene symbols.
+samkey <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/proteomics_analysis/proteins_key.csv")
+samkey.genesym <- read_xlsx("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/proteomics_analysis/proteins_key.xlsx")
+if(length(which(samkey$`Protein names`!=samkey.genesym$`Protein names`))==0){
+  samkey$`Gene names` <- samkey.genesym$`Gene names`
+}
+
+samkey$mz_mz <- paste(samkey$mz, samkey$time, sep="_")
+```
+  
+```{r correct_protein_gene_symbols, message=FALSE}
+# Convert gene symbols to appropriate format for GSEA (https://www.genenames.org/tools/multi-symbol-checker/)
+## Supply gene symbols for proteins with none assigned originally, where possible.
+samkey$`Gene names`[which(samkey$`Protein names`=="Uncharacterized protein FLJ45252")] <- "LOC112268437"
+samkey$`Gene names`[which(samkey$`Protein names`=="Putative inactive maltase-glucoamylase-like protein LOC93432")] <- "MGAM2"
+
+## Correct gene symbols where multiple are provided, where possible
+### If a feature is assigned multiple gene symbols, keep only the first one
+samkey$`Gene names`[which(grepl(";", samkey$`Gene names`))] <- sapply(strsplit(samkey$`Gene names`[which(grepl(";", samkey$`Gene names`))],";"),"[[",1)
+
+samkey.namestocheck <- samkey %>% dplyr::select('Gene names')
+```
+  
+```{r writenamestocheck, eval=FALSE}
+write_delim(samkey.namestocheck, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/GeneSymbols_for_Proteins_forHGNC.txt")
+### Open in Notepad, delete quotes around gene symbols that start with "NA" which were introduced as artifacts of the writing.
+```
+  
+```{r keepfixinggenesymbols, message=FALSE}
+### Load gene names into HGNC gene symbol checker: (https://www.genenames.org/tools/multi-symbol-checker/)
+### Download results
+### Open in Notepad, delete top row "sep=,"
+samkey.HGNC <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/hgnc-symbol-check.csv")
+
+### Get rid of unnecessary duplicate entries (alias included as well as approved symbol)
+for(i in 1:(nrow(samkey.HGNC)-1)){
+  if(samkey.HGNC$Input[i] %in% samkey.HGNC$Input[duplicated(samkey.HGNC$Input)] & samkey.HGNC$`Match type`[i]=="Alias symbol"){
+    samkey.HGNC[i,] <- "REMOVE"
+  }
+}
+samkey.HGNC <- samkey.HGNC %>% filter(samkey.HGNC$Input != "REMOVE")
+
+samkey.HGNC <- samkey.HGNC %>% dplyr::rename(Approved.symbol=`Approved symbol`)
+
+### Get rid of unnecessary duplicate entries (previous symbol included as well as approved symbol)
+for(i in 1:(nrow(samkey.HGNC)-1)){
+  if(samkey.HGNC$Input[i] %in% samkey.HGNC$Input[duplicated(samkey.HGNC$Input)] & samkey.HGNC$`Match type`[i]=="Approved symbol"){
+    if(samkey.HGNC$`Match type`[i+1]=="Previous symbol"){
+      samkey.HGNC[i+1,] <- "REMOVE"
+    }
+  }
+}
+samkey.HGNC <- samkey.HGNC %>% filter(samkey.HGNC$Input != "REMOVE")
+
+
+### Try to annotate unmatched input
+samkey.HGNC$Approved.symbol[which(samkey.HGNC$Input=="DKFZp686F13224")] <- "FAH"
+samkey.HGNC$Approved.symbol[which(samkey.HGNC$Input=="DKFZp686I1730")] <- "DGCR2"
+samkey.HGNC$Approved.symbol[which(samkey.HGNC$Input=="DKFZp781D08126")] <- "RNASEL"
+samkey.HGNC$Approved.symbol[which(samkey.HGNC$Input=="Em:AP000351.3")] <- "GSTT2B"
+samkey.HGNC$Approved.symbol[which(samkey.HGNC$Input=="FLJ22184")] <- "PRR36"
+samkey.HGNC$Approved.symbol[which(samkey.HGNC$Input=="hCG_1988162")] <- "CEBPZOS"
+samkey.HGNC$Approved.symbol[which(samkey.HGNC$Input=="SEPT15")] <- "SEP15"
+samkey.HGNC$Approved.symbol[which(samkey.HGNC$Input=="SF3B14")] <- "SF3B6"
+
+### Check for duplicates
+samkey.HGNC$Input[duplicated(samkey.HGNC$Input)]
+
+### Correct duplicates
+samkey.HGNC <- samkey.HGNC %>% filter(`Approved.symbol` != "B4GAT1")
+samkey.HGNC <- samkey.HGNC[-which(samkey.HGNC$Input=="QARS" & samkey.HGNC$`Approved.symbol`=="EPRS1"),]
+
+samkey.HGNC.genesym <- samkey.HGNC %>% dplyr::select(Input, Approved.symbol) %>% dplyr::rename(`Gene names`=Input)
+
+samkey <- left_join(samkey, samkey.HGNC.genesym)
+samkey <- samkey %>% dplyr::select(mz_mz, Approved.symbol, `Protein names`) %>% dplyr::rename(GeneSymbol=Approved.symbol, ProteinName=`Protein names`) 
+```
+
+  
+  
+### Check for missing data
+```{r}
+# Count missing data
+sum(is.na(FT))
+```
+
+**Missing data count in expression table = `r sum(is.na(FT))`**   
+  
+  
+### Format expression table for MetaboAnalyst
+```{r formatFT}
+# MetaboAnalyst expects a expression table in which:
+## the first column contains mz and retention times for peaks separated by an underscore
+## the other columns contain peak intensities for each sample
+## column names reflect sample IDs
+## the first row of the spreadsheet (below headers) contains labels indicating to which group each sample belongs
+
+
+# Add group labels to expression table
+
+## Cut and paste expression table down one row to leave space for a row of group labels
+FT[2:(nrow(FT)+1),] <- FT[1:nrow(FT),]
+FT[1,1] <- "Label"
+
+## Replace first row with group labels
+FT[1,2:ncol(FT)] <- Key$Group
+```
+  
+  
+## Save formatted expression tables  
+```{r saveFTs}
+# Save the formatted expression tables
+write_csv(FT, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/ExpressionTable.csv")
+```
+  
+  
+## Pre-filtering
+  
+### Examine sample numbers in each group to determine appropriate filtering thresholds.
+```{r groupnumbers}
+# Check that we have enough samples in each group for our variable of interest to set our filtering thresholds appropriately in the next steps
+sum(Key$Group=="Diabetic")
+sum(Key$Group=="Control")
+sum(Key$Group=="Diabetic") + sum(Key$Group=="Control")
+
+# Determine which group has the smaller sample size
+if((sum(Key$Group=="Diabetic")/(sum(Key$Group=="Diabetic") + sum(Key$Group=="Control"))) < (sum(Key$Group=="Control")/(sum(Key$Group=="Diabetic") + sum(Key$Group=="Control")))){
+  small <- sum(Key$Group=="Diabetic")/(sum(Key$Group=="Diabetic") + sum(Key$Group=="Control"))
+} else {
+  small <- sum(Key$Group=="Control")/(sum(Key$Group=="Diabetic") + sum(Key$Group=="Control"))
+}
+
+
+# If it is possible to have a protein detected in 2/3 of one group and no samples of the other group and still not be detected in 30% of samples:
+if(((2/3)*small)<0.3){
+  ## then set a value that is lower than 2/3*(smallest group size/total group size) as the filtering threshold
+  thresh <- floor(((2/3)*small)*100)/100
+} else {
+  ## otherwise set the filtering threshold to 0.3
+  thresh <- 0.3
+}
+```
+  
+**The proportion of diabetic subjects is `r (sum(Key$Group=="Diabetic"))/(sum(Key$Group=="Diabetic") + sum(Key$Group=="Control"))` (`r sum(Key$Group=="Diabetic")` out of `r sum(Key$Group=="Diabetic") + sum(Key$Group=="Control")`).**  
+**The proportion of control subjects is `r (sum(Key$Group=="Control"))/(sum(Key$Group=="Diabetic") + sum(Key$Group=="Control"))` (`r sum(Key$Group=="Control")` out of `r sum(Key$Group=="Diabetic") + sum(Key$Group=="Control")`).**  
+**Is it possible for a protein to be found in 2/3 of the samples in one group but still in less than 30% of the total samples? `r ((2/3)*small) < 0.3`**  
+**We will set our filtering thresholds accordingly.**
+  
+  
+### Filter proteins based on prevalence in samples
+  
+#### Filter based on prevalence in all samples
+```{r filterfeatures}
+# Keep only features found in at least 30% of total samples
+
+## Create variables reflecting the number of samples in each group in which the feature was not found
+FTf <- FT %>% mutate(zeros = (rowSums(FT == 0)))
+
+## Keep only samples that meet designated criterion
+FTf <- FTf[FTf$zeros <= .7*nrow(Key), ]
+```
+  
+#### Filter based on prevalence in each group
+```{r filterfeatures2}
+# Keep only features found in at least 2/3 of samples in an group
+
+## Create variables reflecting the proportion of samples in each group in which the feature was not found
+FTf <- FTf %>% mutate(diabeticzeros = (rowSums(FTf[,FTf[1,]=="Diabetic"] == 0))/length(FTf[,FTf[1,]=="Diabetic"]))
+FTf <- FTf %>% mutate(controlzeros = (rowSums(FTf[,FTf[1,]=="Control"] == 0))/length(FTf[,FTf[1,]=="Control"]))
+
+## Keep only samples that meet designated criterion
+FTf2 <- FTf[FTf$diabeticzeros <= (1/3) | FTf$controlzeros <= (1/3), ]
+
+## Remove created variables from data set
+FTf2 <- FTf2 %>% dplyr::select(-diabeticzeros, -controlzeros, -zeros)
+
+# Save the formatted feature tables
+write_csv(FTf2, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/ExpressionTable_justprefiltered.csv")
+```
+  
+**Before filtering, `r nrow(FT)-1` proteins were identified.**  
+**After filtering, `r nrow(FTf2)-1` proteins were retained.**
+  
+  
+## Missingness
+  
+### Convert zeros to NA
+```{r zeroNA}
+FTf2[FTf2==0] <- NA
+```
+  
+**A total of `r sum(is.na(FTf2))` (`r round(sum(is.na(FTf2))/(nrow(FTf2)*(ncol(FTf2)-1))*100, digits=2)`%) missing values were detected in the dataset.**
+  
+### Impute missing data
+```{r imputemissing}
+# Replace missing values with 1/2 minimum relative peak intensity detected in dataset
+## Identify minimum
+minFTf2 <- as.numeric(min(as.matrix(FTf2[2:nrow(FTf2),2:length(FTf2)]), na.rm=TRUE))
+
+## Replace missing values with 1/2 minima
+FTf2[is.na(FTf2)] <- minFTf2/2
+```
+  
+  
+## Save clean data
+```{r savecleandata}
+# Save the formatted expression tables
+write_csv(FTf2, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/ExpressionTable_prefiltered.csv")
+```
+  
+  
+  
+  
+  
+# MetaboAnalystR Analysis
+  
+## Initialization
+```{r initialize}
+# Create the mSet Object (struct), specifying that the data to be uploaded is a peak table ("pktable") and that statistical analysis will be performed ("stat").
+mSet<-InitDataObjects("pktable", "stat", FALSE)
+```
+  
+```{r readpktbl}
+# Read in the filtered peak list
+mSet<-Read.TextData(mSet, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/ExpressionTable_prefiltered.csv", "colu", "disc")
+```
+  
+```{r sanitycheck}
+mSet<-SanityCheckData(mSet)
+```
+  
+```{r MRminrep}
+# Perform data processing - Minimum Value Replacing
+## By default, this replaces NAs with 1/5 of the minimum value of each feature
+mSet <- ReplaceMin(mSet)
+# We did this imputation manually above, and running it should have no effect on the data because we have no missing values, but for some reason, this step is needed to make the next steps function.
+
+# Remove features containing a user-defined % cut-off of missing values
+# mSet <- RemoveMissingPercent(mSet, percent=1)
+# We did this manually, too
+```
+  
+  
+## Normalization and Transformation
+```{r filternorm}
+# Perform data processing - Variable Filtering and Normalization
+# mSet<-FilterVariable(mSet, filter="none", qcFilter="F", rsd=25)
+mSet<-PreparePrenormData(mSet)
+# No normalization, log10 transformation, no scaling
+mSet<-Normalization(mSet, "NULL", "LogNorm", "NULL")
+```
+  
+```{r plotnorm}
+mSet<-PlotNormSummary(mSet, "norm_0_", "png", 72, width=NA)
+mSet<-PlotSampleNormSummary(mSet, "snorm_0_", "png", 72, width=NA)
+```
+  
+  
+## Univariate Analyses
+  
+### Fold Change Analysis
+```{r FC, message=FALSE}
+# Perform fold-change analysis
+mSet <- FC.Anal(mSet, cmp.type=1, paired=FALSE, fc.thresh = 1)
+mSet <- PlotFC(mSet, "fc_0_", "png", dpi=300, width=NA)
+
+FoldChange <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/fold_change.csv")
+FCup <- FoldChange %>% filter(`log2(FC)`>=2)
+FCdown <- FoldChange %>% filter(`log2(FC)`<=-2)
+
+names(FoldChange)[1] <- "mz_mz"
+FC <- left_join(samkey, FoldChange) %>% filter(!is.na(`Fold Change`))
+write_csv(FC, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/fold_change_annot.csv")
+```
+  
+#### `r nrow(FCup)` proteins are more than 2 fold (log2(FC)) more abundant in diabetic islets while `r nrow(FCdown)` proteins are  more than 2 fold less abundant.
+  
+  
+### T-tests
+```{r ttests}
+# Get output for t-test analysis
+# Raw data
+mSet <- Ttests.Anal(mSet, nonpar=F, threshp=0.05, paired=FALSE, equal.var=TRUE, pvalType="raw", FALSE)
+mSet <- PlotTT(mSet, "tt_0_raw_", "png", dpi=300, width=NA)
+# Change name of saved .csv file
+ttest <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/t_test.csv")
+colnames(ttest)[1] <- "mz_mz"
+colnames(ttest)[4] <- " -log10(p)"
+ttest2 <- left_join(samkey, ttest) %>% filter(!is.na(FDR))
+write_csv(ttest2, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/t_test_raw.csv")
+
+# FDR corrected
+mSet <- Ttests.Anal(mSet, nonpar=F, threshp=0.1, paired=FALSE, equal.var=TRUE, pvalType="fdr", FALSE)
+mSet <- PlotTT(mSet, "tt_1_fdr_", "png", dpi=300, width=NA)
+# Change name of saved .csv file
+ttest2 <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/t_test.csv")
+colnames(ttest2)[1] <- "mz_mz"
+colnames(ttest2)[4] <- " -log10(p)"
+ttest2 <- left_join(samkey, ttest2) %>% filter(!is.na(FDR))
+write_csv(ttest2, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/t_test_fdr.csv")
+```
+  
+#### The abundance of `r nrow(ttest2)` proteins is significantly (padj<0.1) altered in diabetic islets.
+  
+  
+  
+## Multivariate Analyses
+  
+### PCA
+```{r PCA}
+# Perform PCA
+mSet <- PCA.Anal(mSet)
+mSet <- PlotPCAPairSummary(mSet, "pca_pair_0_", "png", 300, width=NA, 5)
+mSet <- PlotPCAScree(mSet, "pca_scree_0_", "png", 300, width=NA, 5)
+mSet <- PlotPCA2DScore(mSet, "pca_score2d_0_", "png", 300, width=NA, 1,2,0.95,0,0)
+mSet <- PlotPCALoading(mSet, "pca_loading_0_", "png", 300, width=NA, 1,2);
+mSet <- PlotPCABiplot(mSet, "pca_biplot_0_", "png", 300, width=NA, 1,2)
+mSet <- PlotPCA3DScoreImg(mSet, "pca_score3d_0_", "png", 300, width=NA, 1,2,3, 40)
+```
+  
+  
+  
+# Limma analysis
+```{r getnormdf}
+# Import log-transformed dataset and format appropriately
+dfnorm <- qread("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/complete_norm.qs")
+dfnorm <- as.matrix(t(dfnorm))
+```
+
+
+```{r limma}
+#Define the design vector
+# data input should be matrix-like object with rows corresponding to genes and columns to samples
+group = as.factor(Key$Group)
+design = model.matrix(~0+group)
+colnames(design) = gsub("group","",colnames(design))
+#Make contrasts
+x <- "Diabetic-Control"
+contrast =  makeContrasts(contrasts=x,levels=design)
+fit1 <- lmFit(dfnorm, design)
+fit2 <- contrasts.fit(fit1,contrasts = contrast)
+fit3 <- eBayes(fit2)
+```
+  
+```{r limmares05}
+# Get significant up/significant down/not significant output
+sig <- decideTests(fit3, p.value=0.05, adjust.method = "none")
+sig <- data.frame(sig)
+sig$mz_mz <- rownames(sig)
+names(sig)[1] <- "DiffAbund"
+
+# Get results table
+results <- topTable(fit3, number=200, p.value=0.05, adjust.method="none")
+
+results$mz_mz <- rownames(results)
+results2 <- left_join(samkey, results) %>% filter(!is.na(logFC))
+
+results2 <- results2 %>% mutate(log10p = -log10(P.Value)) 
+write_csv(results2, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/limma_results05.csv")
+
+
+FCup <- results2 %>% filter(logFC>0)
+FCdown <- results2 %>% filter(logFC<0)
+
+```
+  
+#### `r nrow(results2)` proteins differ significantly between diabetic and control islets. `r nrow(FCup)` proteins are significantly (p<0.05) more abundant in diabetic islets while `r nrow(FCdown)` proteins are significantly less abundant.
+  
+```{r limmaresFDR}
+# Get significant up/significant down/not significant output
+sigfdr <- decideTests(fit3, p.value=0.1, adjust.method = "fdr")
+sigfdr <- data.frame(sigfdr)
+sigfdr$mz_mz <- rownames(sigfdr)
+names(sigfdr)[1] <- "DiffAbund"
+
+# Get results table
+resultsfdr <- topTable(fit3, number=100, p.value=0.1, adjust.method="fdr")
+
+resultsfdr$mz_mz <- rownames(resultsfdr)
+resultsfdr2 <- left_join(samkey, resultsfdr) %>% filter(!is.na(logFC))
+
+resultsfdr2 <- resultsfdr2 %>% mutate(log10p = -log10(adj.P.Val)) 
+write_csv(resultsfdr2, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/limma_resultsfdr_FDR1.csv")
+
+
+FCupfdr <- resultsfdr2 %>% filter(logFC>0)
+FCdownfdr <- resultsfdr2 %>% filter(logFC<0)
+
+```
+  
+#### `r nrow(resultsfdr2)` proteins differ significantly between diabetic and control islets. `r nrow(FCupfdr)` proteins are significantly (padj<0.1) more abundant in diabetic islets while `r nrow(FCdownfdr)` proteins are significantly less abundant.
+  
+  
+```{r methodcomp}
+resultsfdr2$mz_mz %in% ttest2$mz_mz
+```
+  
+#### All but one of the proteins identified by `limma` and by t-tests with FDR correction are the same.
+  
+  
+## Volcano plot
+```{r volcdat}
+# Get limma p values
+ps <- data.frame(fit3$p.value)
+names(ps)[1] <- "p.value"
+ps <- ps %>% mutate(padj.value=p.adjust(ps$p.value, method = "fdr", n = length(ps$p.value)))
+ps$mz_mz <- rownames(ps)
+
+
+# Merge fold change, raw p value, and differential abundance indicator data
+volcdat <- left_join(FC, ps)
+volcdat <- left_join(volcdat, sig)
+volcdat <- volcdat %>% mutate(DiffAbund=case_when(
+  volcdat$p.value<0.05 & volcdat$`log2(FC)`>1 ~ 1,
+  volcdat$p.value<0.05 & volcdat$`log2(FC)`<(-1) ~ 1,
+  volcdat$p.value>0.05 ~ 0,
+  TRUE ~ 0
+))
+volcdat$DiffAbund <- factor(volcdat$DiffAbund)
+volcdat <- volcdat %>% mutate(log10p = -log10(p.value))
+
+write_csv(volcdat, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/volcdat.csv")
+
+
+# Merge fold change, FDR-adjusted p value, and differential abundance indicator data
+volcdatFDR <- left_join(FC, ps)
+volcdatFDR <- left_join(volcdatFDR, sigfdr)
+volcdatFDR <- volcdatFDR %>% mutate(DiffAbund=case_when(
+  volcdatFDR$padj.value<0.05 & volcdatFDR$`log2(FC)`>1 ~ 1,
+  volcdatFDR$padj.value<0.05 & volcdatFDR$`log2(FC)`<(-1) ~ 1,
+  volcdatFDR$padj.value>0.05 ~ 0,
+  TRUE ~ 0
+))
+volcdatFDR$DiffAbund <- factor(volcdatFDR$DiffAbund)
+volcdatFDR <- volcdatFDR %>% mutate(log10p = -log10(padj.value))
+
+write_csv(volcdatFDR, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/volcdat_fdr.csv")
+```
+
+```{r volcplot, fig.width=6, fig.height=4}
+ggplot(volcdat, aes(x = `log2(FC)`, y = log10p, colour = DiffAbund, size=DiffAbund)) +
+  geom_point(shape=19, alpha = 0.4) +
+  scale_colour_manual(values=c("black", "magenta")) +
+  scale_size_manual(values=c(1.5, 2)) +
+  geom_hline(yintercept = (-log10(0.05))) +
+  geom_vline(xintercept = -1) +
+  geom_vline(xintercept = 1) +
+  theme_classic() +
+  theme(legend.position="none", panel.border=element_rect(fill=NA)) +
+  labs(x ="log2 (FC)", y ="-log10(p)")
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/volcano_limmaRaw.png", dpi=300)
+```
+  
+```{r volcplotFDR, fig.height=4, fig.width=6}
+ggplot(volcdatFDR, aes(x = `log2(FC)`, y = log10p, colour = DiffAbund, size=DiffAbund)) +
+  geom_point(shape=19, alpha = 0.4) +
+  scale_colour_manual(values=c("black", "magenta")) +
+  scale_size_manual(values=c(1.5, 2)) +
+  geom_hline(yintercept = (-log10(0.05))) +
+  geom_vline(xintercept = -1) +
+  geom_vline(xintercept = 1) +
+  theme_classic() +
+  theme(legend.position="none", panel.border=element_rect(fill=NA)) +
+  labs(x ="log2 (FC)", y ="-log10(padj)")
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/volcano_limmaFDR.png", dpi=300)
+```
+  
+```{r volcreplot, fig.height=4, fig.width=6}
+ggplot(volcdat, aes(x = `log2(FC)`, y = log10p, colour = DiffAbund)) +
+  geom_point(shape=19, alpha = 0.7, size=1.5) +
+  scale_colour_manual(values=c("lightgray", "red")) +
+  geom_hline(yintercept = (-log10(0.05)), color="blue", linetype='dashed') +
+  geom_vline(xintercept = -1, color="blue", linetype='dashed') +
+  geom_vline(xintercept = 1, color="blue", linetype='dashed') +
+  theme_bw() +
+  theme(legend.position="none", panel.border=element_rect(fill=NA)) +
+  labs(x ="log2 Fold Change)", y ="-log10(p value)")
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/volcano_limmaRaw_redcol.png", dpi=300)
+```
+  
+## Heatmap
+  
+### Limma (raw)
+```{r heatmapdata}
+# Set gene names as row names for data set
+dfhm <- data.frame(dfnorm)
+dfhm$mz_mz <- rownames(dfhm)
+dfhm <- right_join(samkey, dfhm) %>% filter(mz_mz %in% results2$mz_mz) %>% data.frame()
+rownames(dfhm) <- dfhm$Gene.names
+dfhm <- dfhm %>% dplyr::select(XIN460:AAJ2482) %>% as.matrix()
+
+## Specify group annotations
+grpann <- Key %>% dplyr::select(IIDPID, Group)
+rownames(grpann) <- grpann$IIDPID
+grpann <- grpann %>% dplyr::select(-IIDPID)
+names(grpann) <- "Group"
+grpann$Group[which(grpann$Group=="Control")] <- "Non-Diabetic"
+```
+  
+```{r heatmap, fig.height=22, fig.width=7}
+# Set colors for categories
+annCol <- list(Group=c(`Non-Diabetic`="brown2", Diabetic="springgreen3"))
+## TO specify above, add "annotation_colors=annCol," below
+
+# Create heatmap with features identified by limma (p<0.05, not FDR-corrected)
+hmttest <- pheatmap(dfhm, color=colorRampPalette(rev(brewer.pal(n=11, name="RdBu")))(100), scale="row", clustering_method="ward.D2", annotation_col=grpann, annotation_colors=annCol,  filename="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/heatmap_limma.png", width=7, height=22)
+```
+   
+### Limma (FDR-corrected)
+```{r heatmapdatafdr}
+# Set gene names as row names for data set
+dfhm <- data.frame(dfnorm)
+dfhm$mz_mz <- rownames(dfhm)
+dfhm <- right_join(samkey, dfhm) %>% filter(mz_mz %in% resultsfdr2$mz_mz) %>% data.frame()
+rownames(dfhm) <- dfhm$GeneSymbol
+dfhm <- dfhm %>% dplyr::select(XIN460:AAJ2482) %>% as.matrix()
+
+## Specify group annotations
+grpann <- Key %>% dplyr::select(IIDPID, Group)
+rownames(grpann) <- grpann$IIDPID
+grpann <- grpann %>% dplyr::select(-IIDPID)
+names(grpann) <- "Group"
+grpann$Group[which(grpann$Group=="Control")] <- "Non-Diabetic"
+```
+  
+```{r heatmapfdr}
+# Create heatmap with features identified by limma (padj<0.1, FDR-corrected)
+hmttest <- pheatmap(dfhm, color=colorRampPalette(rev(brewer.pal(n=11, name="RdBu")))(100), scale="row", clustering_method="ward.D2", annotation_col=grpann, annotation_colors=annCol,  filename="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/heatmap_limmaFDR.png", width=6, height=7, dpi=300)
+```
+
+  
+  
+  
+  
+# Differences in individual proteins
+  
+## Get normalized H/L ratios for each sample for differentially abundant proteins  
+```{r wranglesigprot}
+# Get normalized H/L ratios for each sample for differentially abundant proteins
+FTann <- right_join(samkey, FTf2) %>% filter(mz_mz %in% resultsfdr2$mz_mz)
+sigprots <- paste(FTann$`GeneSymbol`, FTann$ProteinName, sep=" ")
+FTann$protID <- paste(FTann$`GeneSymbol`, FTann$ProteinName, sep=" ")
+FTann <- FTann %>% dplyr::select(`protID`, XIN460:AAJ2482)
+
+# Reformat data frame
+FTannt <- data.frame(t(FTann))
+names(FTannt) <- FTannt[1,]
+FTannt <- FTannt[-1,]
+
+# Add experimental group information to data frame
+FTannt$Group <- Key$Group
+```
+  
+```{r plotsigprot}
+# Plot normalized H/L ratios for each differentially abundant protein
+for(i in 1:(ncol(FTannt)-1)){
+  p <- ggplot(aes(x=Group, y=FTannt[,i]), data=FTannt) +
+    geom_jitter(width=0.08, size=3) +
+    ylab(names(FTannt[i])) +
+    ggtitle(sigprots[i]) +
+    theme_bw() +
+    theme(plot.title = element_text(size=12))
+  print(p)
+}
+```
+  
+  
+  
+# Pathway Enrichment Analysis (GSEA)
+  
+```{r pathdf}
+# Rank genes in entire data set according to product of log fold change and -log10(p)
+# Remove data for which no gene symbol was identified
+dfGSEA <- volcdat %>% mutate(rank = `log2(FC)`*log10p) %>% filter(!is.na(GeneSymbol))
+
+```
+  
+`r nrow(dfGSEA)-(length(unique(dfGSEA$GeneSymbol)))` rows of the data set contain duplicated gene symbols.
+  
+```{r rmdupgene}
+# Remove duplicated rows from the data set, keeping the row with the lowest p value
+for(i in 1:length(unique(dfGSEA$GeneSymbol))){
+  if(dfGSEA$GeneSymbol[i+1] == dfGSEA$GeneSymbol[i]){
+    ifelse(
+      dfGSEA$p.value[i] <= dfGSEA$p.value[i+1],
+      dfGSEA <- dfGSEA %>% filter(dfGSEA$mz_mz != dfGSEA$mz_mz[i+1]),
+      dfGSEA <- dfGSEA %>% filter(dfGSEA$mz_mz != dfGSEA$mz_mz[i])
+    )
+  }
+}
+
+# Run again to remove duplicates remaining (occurs because originally genes were triplicated or quadruplicated)
+for(i in 1:(length(unique(dfGSEA$GeneSymbol))-1)){
+  if(dfGSEA$GeneSymbol[i+1] == dfGSEA$GeneSymbol[i]){
+    ifelse(
+      dfGSEA$p.value[i] <= dfGSEA$p.value[i+1],
+      dfGSEA <- dfGSEA %>% filter(dfGSEA$mz_mz != dfGSEA$mz_mz[i+1]),
+      dfGSEA <- dfGSEA %>% filter(dfGSEA$mz_mz != dfGSEA$mz_mz[i])
+    )
+  }
+}
+
+nrow(dfGSEA) == length(unique(dfGSEA$GeneSymbol))
+```
+  
+  
+  
+```{r generank}
+# Extract gene rank and list in decreasing order for GSEA
+ranks <- as.numeric(dfGSEA$rank)
+names(ranks) <- dfGSEA$GeneSymbol
+ranks <- sort(ranks, decreasing=TRUE)
+ranks[1:10]
+```
+  
+## Gene Ontology enrichment analysis
+```{r gmt}
+# Import .gmt file with pathway information by gene symbol (Gene sets derived from the GO Biological Process ontology)
+## Obtained from GSEA 3-6-2023 http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+go <- gmtPathways("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/c5.go.bp.v2023.1.Hs.symbols.gmt")
+```
+  
+```{r pathfgsea}
+set.seed(06212022)
+
+fgseaRes <- fgsea(pathways = go, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+
+  
+```{r pathsel}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/fgseaRes_GO.txt", sep="\t", sep2=c("", " ", ""))
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/fgseaRes_GO.txt")
+
+
+# Select top 10 up and down-regulated pathways
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+topdown <- pathtab %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+top$Direction[1:10] <- "Up"
+top$Direction[11:20] <- "Down"
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+
+
+# Write cleaned table
+write_csv(top, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/Top_GSEA_Pathways_GO.csv")
+```
+  
+#### **The number of GO BPs represented among the differentially abundant proteins (p<0.05) was `r pathtab %>% filter(pval<0.05) %>% nrow()`.**  
+#### **The number of GO BPs represented among the differentially abundant proteins (padj<0.1) was `r pathtab %>% filter(padj<0.1) %>% nrow()`.**  
+  
+### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r sigpathgraph, fig.width=11, fig.height=3}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+if(nrow(pathg)>=1){
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("red", "black")) +
+  coord_flip() +
+  scale_x_discrete(name="GO Biological Processes\nAssociated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/pathsigfig_GO.png")
+}
+
+
+```
+  
+#### Top 20 pathways
+```{r pathgraph, fig.width=11, fig.height=6}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top
+
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+# Graph pathways by p value
+pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("red", "black")) +
+  coord_flip() +
+  scale_x_discrete(name="GO Biological Processes Associated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/TwentyPathfig_GO.png", dpi=300)
+```
+  
+  
+## KEGG enrichment analysis
+```{r gmtKEGG}
+# Import .gmt file with pathway information by gene symbol (Canonical Pathways gene sets derived from the KEGG pathway database)
+## Obtained from GSEA 3-6-2023 http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+kegg <- gmtPathways("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/c2.cp.kegg.v2023.1.Hs.symbols.gmt")
+```
+  
+```{r pathfgseaKEGG}
+set.seed(06212022)
+
+fgseaRes <- fgsea(pathways=kegg, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+  
+```{r pathselKEGG}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/fgseaRes_KEGG.txt", sep="\t", sep2=c("", " ", ""))
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/fgseaRes_KEGG.txt")
+
+
+# Select top 10 up and down-regulated pathways
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+topdown <- pathtab %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("KEGG_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+top$Direction[1:10] <- "Up"
+top$Direction[11:20] <- "Down"
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05)
+
+# Write cleaned table
+write_csv(top, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/Top_GSEA_Pathways_KEGG.csv")
+```
+    
+#### **The number of KEGG Pathways represented among the differentially abundant proteins (p<0.05) was `r pathtab %>% filter(pval<0.05) %>% nrow()`.**  
+#### **The number of KEGG Pathways represented among the differentially abundant proteins (padj<0.1) was `r pathtab %>% filter(padj<0.1) %>% nrow()`.**  
+  
+### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r sigpathgraphKEGG, fig.width=11, fig.height=3.2}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+if(nrow(pathg)>=1){
+  # Graph pathways by p value
+pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("red", "black")) +
+  coord_flip() +
+  scale_x_discrete(name="KEGG Pathways\nAssociated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/pathsigfig_KEGG.png", dpi=300)
+}
+```
+  
+#### Top 20 pathways
+```{r pathgraphKEGG, fig.width=10, fig.height=3.4}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top
+pathg <- pathg %>% filter(!is.na(pathway))
+
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+# Graph pathways by p value
+pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("red", "black")) +
+  coord_flip() +
+  scale_x_discrete(name="KEGG Pathways Associated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/TwentyPathfig_KEGG.png", dpi=300)
+```
+  
+  
+## Hallmark enrichment analysis
+```{r gmtHM}
+# Import .gmt file with pathway information by gene symbol (Hallmark gene sets)
+## Obtained from GSEA 3-6-2023 http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+hm <- gmtPathways("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/h.all.v2023.1.Hs.symbols.gmt")
+```
+  
+```{r pathfgseaHM}
+set.seed(06212022)
+
+fgseaRes <- fgsea(pathways=hm, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+  
+```{r pathselHM}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/fgseaRes_HM.txt", sep="\t", sep2=c("", " ", ""))
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/fgseaRes_HM.txt")
+
+
+# Select top 10 up and down-regulated pathways
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+topdown <- pathtab %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("HALLMARK_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+top$Direction[1:10] <- "Up"
+top$Direction[11:20] <- "Down"
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05)
+
+# Write cleaned table
+write_csv(top, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/Top_GSEA_Pathways_HM.csv")
+```
+  
+#### **The number of Hallmark gene sets represented among the differentially abundant proteins (p<0.05) was `r pathtab %>% filter(pval<0.05) %>% nrow()`.**  
+#### **The number of Hallmark gene sets represented among the differentially abundant proteins (padj<0.1) was `r pathtab %>% filter(padj<0.1) %>% nrow()`.**  
+  
+### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r sigpathgraphHM, fig.width=11, fig.height=3}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+if(nrow(pathg)>=1){
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("red", "black")) +
+  coord_flip() +
+  scale_x_discrete(name="Hallmark Pathways Associated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/pathsigfig_HM.png", dpi=300)
+}
+```
+  
+#### Top 20 pathways
+```{r pathgraphHM, fig.width=11, fig.height=3}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top
+pathg <- pathg %>% filter(!is.na(pathway))
+
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+# Graph pathways by p value
+pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("red", "black")) +
+  coord_flip() +
+  scale_x_discrete(name="Hallmark Pathways Associated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/TwentyPathfig_HM.png", dpi=300)
+```
+  
+  
+## Cell type signature enrichment analysis
+```{r gmtcell}
+# Import .gmt file with pathway information by gene symbol (Gene sets that contain curated cluster markers for cell types identified in single-cell sequencing studies of human tissue)
+## Obtained from GSEA 3-6-2023 http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+cts <- gmtPathways("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/c8.all.v2023.1.Hs.symbols.gmt")
+```
+  
+```{r pathfgseacell}
+set.seed(06212022)
+
+fgseaRes <- fgsea(pathways=cts, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+  
+```{r pathselcell}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/fgseaRes_cts.txt", sep="\t", sep2=c("", " ", ""))
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/fgseaRes_cts.txt")
+
+
+# Select top 10 up and down-regulated pathways
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+topdown <- pathtab %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+top$Direction[1:10] <- "Up"
+top$Direction[11:20] <- "Down"
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05)
+
+# Write cleaned table
+write_csv(top, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/Top_GSEA_Pathways_cts.csv")
+```
+  
+#### **The number of cell type-related gene sets represented among the differentially abundant proteins (p<0.05) was `r pathtab %>% filter(pval<0.05) %>% nrow()`.**  
+#### **The number of cell type-related gene sets represented among the differentially abundant proteins (padj<0.1) was `r pathtab %>% filter(padj<0.1) %>% nrow()`.**  
+  
+### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r sigpathgraphcell, fig.width=11, fig.height=3}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+if(nrow(pathg)>=1){
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("red", "black")) +
+  coord_flip() +
+  scale_x_discrete(name="Cell Type-Specific Pathways\nAssociated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/pathsigfig_cts.png", dpi=300)
+}
+```
+  
+#### Top 20 pathways
+```{r pathgraphcell, fig.width=11, fig.height=6}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- top
+pathg <- pathg %>% filter(!is.na(pathway))
+
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+# Graph pathways by p value
+pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("red", "black")) +
+  coord_flip() +
+  scale_x_discrete(name="Cell Type-Specific Pathways Associated with Diabetes") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/TwentyPathfig_cts.png", dpi=300)
+```
+  
+  
+  
+  
+```{r session}
+sessionInfo()
+```  
