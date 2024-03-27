@@ -137,6 +137,52 @@ results <- results(dds, contrast = c("condition", "Yes", "No"))
 # dim(results)
 ```
 
+```{r - saving normalized counts}
+
+dds <- DESeqDataSetFromMatrix(countData = filtered_counts, colData = columnData, design = ~condition) # ~condition is what tells it that I am interested in seeing the relationships based on condition
+
+#Adding the right column names to the dds object
+colnames(dds) <- sample_table$sampleName
+# dds$condition - These should match with colnames(dds); they do.
+
+## Normalizing the counts
+
+# Estimated size factors are determined by the library size
+dds <- estimateSizeFactors(dds)
+
+# Extract and save normalized counts
+norm_counts <- counts(dds, normalized=TRUE)
+
+
+# Preparing Ensembl IDs (removing version numbers as before)
+ensemble_ids <- gsub("\\.\\d+$", "", rownames(norm_counts))
+rownames(norm_counts) <- gsub("\\.\\d+$", "", rownames(norm_counts))
+
+# Connecting to Ensembl and retrieve gene names
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+converted_ids <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
+                       filters = "ensembl_gene_id",
+                       values = ensembl_ids,
+                       mart = ensembl)
+
+# Create a mapping from Ensembl IDs to Gene Names
+id_to_name <- setNames(converted_ids$external_gene_name, converted_ids$ensembl_gene_id)
+
+# Replace row names in norm_counts with gene names, using Ensembl IDs as keys
+norm_counts_rownames <- rownames(norm_counts)
+rownames(norm_counts) <- ifelse(norm_counts_rownames %in% names(id_to_name), id_to_name[norm_counts_rownames], NA)
+
+dim(norm_counts)
+
+# Filter out rows where row names are NA or empty
+norm_counts <- norm_counts[!is.na(rownames(norm_counts)) & rownames(norm_counts) != "", ]
+
+rownames(norm_counts)
+# Save the updated norm_counts data frame
+write.csv(norm_counts, "../Data/normalized_gene_expression_data.csv", row.names = TRUE)
+
+```
 
 ```{r Adding GeneName to results df}
 #Rownames to a column
@@ -185,11 +231,11 @@ results$neg_log10_Adjpvalue <- -log10(results$padj)
 
 # write.csv(results, "../Data/ForReview/DESeqResults.csv", row.names = FALSE)
 
-# Saving only the significant genes based on pvalue
+# Filtering for significant genes based on pvalue
 sigGenes_p <- subset(results, pvalue <= 0.05)
 sigGenes_p <- sigGenes_p[order(sigGenes_p$pvalue),]
 
-# Saving only the significant genes based on pvalue
+# Filtering for significant genes based on adjusted pvalue
 sigGenes_padj <- subset(results, padj <= 0.1)
 sigGenes_padj <- sigGenes_padj[order(sigGenes_padj$pvalue),]
 
@@ -198,8 +244,8 @@ dim(sigGenes_padj)
 
 # Saving all df's
 write.csv(results, "../Data/DGE_Results.csv", row.names = FALSE)
-write.csv(sigGenes_p, file = "../Data/DEG_sig_genes-p.csv", row.names = FALSE)
-write.csv(sigGenes_padj, file = "../Data/DEG_sig_genes-adjp.csv", row.names = FALSE)
+write.csv(sigGenes_p, file = "../Data/DGE_sig_genes_p.csv", row.names = FALSE)
+write.csv(sigGenes_padj, file = "../Data/DGE_sig_genes_adjp.csv", row.names = FALSE)
 
 ```
 
