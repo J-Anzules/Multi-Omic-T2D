@@ -113,7 +113,7 @@ filtered_counts <- counts[keep_genes, ]
 ```
 
 
-```{r DESeq differential gene expression analysis}
+```{r DESeq differential gene exprl,ession analysis}
 
 columnData <- data.frame(condition = sample_table$diabetes_status)
 
