@@ -12,23 +12,23 @@ This repository contains code and analysis for multi-omic data related to Type 2
 
 ## Repository Structure
 
-├── Alignment.sh # Script for aligning sequence data
-├── Counting.sh # Script for counting features
-├── DGE-Figures.R # R script for generating DGE figures
-├── DGE_Analysis.Rmd # RMarkdown for differential gene expression analysis
-├── GSEA_Analysis.Rmd # RMarkdown for gene set enrichment analysis
-├── GSEA_Figures.R # R script for generating GSEA figures
-├── Importing_salmon_output.R # R script for importing salmon quantification results
-├── Part2_Phyloseq_moretrim.Rmd # RMarkdown for phylogenetic analysis
-├── README.md # This README file
-├── SalmonQuant.sh # Script for quantifying transcripts with Salmon
-├── T2D_Proteomics_Houser.Rmd # RMarkdown for proteomics analysis
-├── T2D_metprotgen_xMWAS.Rmd # RMarkdown for integrated metabolomics, proteomics, and genomics analysis
-├── fastqc.sh # Script for quality control of sequence data
-├── heatmap_limmaFDR.png # Example heatmap figure
-├── phyloseqobject_moretrim.RDS # RDS file for phyloseq object
-├── trimfirst7.sh # Script for trimming sequences
-└── triming.sh # Another script for trimming sequences
+├── Alignment.sh # Script for aligning sequence data  
+├── Counting.sh # Script for counting features  
+├── DGE-Figures.R # R script for generating DGE figures  
+├── DGE_Analysis.Rmd # RMarkdown for differential gene expression analysis  
+├── GSEA_Analysis.Rmd # RMarkdown for gene set enrichment analysis  
+├── GSEA_Figures.R # R script for generating GSEA figures  
+├── Importing_salmon_output.R # R script for importing salmon quantification results  
+├── Part2_Phyloseq_moretrim.Rmd # RMarkdown for phylogenetic analysis  
+├── README.md # This README file  
+├── SalmonQuant.sh # Script for quantifying transcripts with Salmon  
+├── T2D_Proteomics_Houser.Rmd # RMarkdown for proteomics analysis  
+├── T2D_metprotgen_xMWAS.Rmd # RMarkdown for integrated metabolomics, proteomics, and genomics analysis  
+├── fastqc.sh # Script for quality control of sequence data  
+├── heatmap_limmaFDR.png # Example heatmap figure  
+├── phyloseqobject_moretrim.RDS # RDS file for phyloseq object  
+├── trimfirst7.sh # Script for trimming sequences  
+└── triming.sh # Another script for trimming sequences  
 
 Data
 The analysis uses multi-omic data including genomic, transcriptomic, and proteomic data. Ensure you have access to the necessary datasets and follow any relevant guidelines for their use.
