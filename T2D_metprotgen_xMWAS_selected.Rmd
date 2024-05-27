@@ -1,12 +1,13 @@
 ---
 title: "xMWAS_T2D_islets_omics"
-author: "Madelyn Houser"
+author: "Jonathan Anzules & Madelyn Houser"
 date: '2023-03-20'
 output: 
   html_document:
     toc: true
   word_document:
     toc: true
+Description: "The xMWAS_T2D_islets_omics code integrates multi-omics datasets (transcriptomics, metabolomics, and proteomics) for the analysis of islet samples from diabetic and non-diabetic individuals. The code includes data preprocessing, imputation of missing values, and log transformation. It performs multi-omics integration using the xMWAS tool to identify significant features and their associations. The analysis includes community detection, centrality measurements, and pathway enrichment analysis to reveal biological insights into Type 2 Diabetes, such as changes in metabolic pathways and gene expression networks. Visualizations are generated to illustrate the results."
 ---
 
 ```{r package, warning=FALSE, message=FALSE}

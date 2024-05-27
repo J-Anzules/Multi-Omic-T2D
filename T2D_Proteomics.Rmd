@@ -1,12 +1,12 @@
 ---
 title: "T2D_Proteomics_Houser"
-author: "Madelyn Houser"
-date: "6/7/2022"
+author: "Jonathan Anzules and Madelyn Houser"
 output: 
   html_document:
     toc: yes
   word_document:
     toc: yes
+Description: "This notebook contains is designed to process and analyze proteomic data related to Type 2 Diabetes (T2D). It includes data cleaning, normalization, and differential expression analysis to identify significant changes in protein expression between diabetic and non-diabetic samples. The code also performs pathway enrichment analysis to understand the biological processes and pathways affected by T2D, and generates various visualizations such as heatmaps, PCA plots, and volcano plots to illustrate the results. "
 ---
   
 # Load packages
