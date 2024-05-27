@@ -1,0 +1,2416 @@
+---
+title: "xMWAS_T2D_islets_omics"
+author: "Madelyn Houser"
+date: '2023-03-20'
+output: 
+  html_document:
+    toc: true
+  word_document:
+    toc: true
+---
+
+```{r package, warning=FALSE, message=FALSE}
+#load package
+library(tidyverse)
+library(xMWAS)
+library(ggpubr)
+library(fgsea)
+library(data.table)
+library(readxl)
+```
+  
+# Format data sets
+```{r importdata, message=FALSE}
+# transcriptomics - counts
+tran <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Genomics_for_Vicki/NewAnalysis/ExpressionData_filtered.csv")
+
+# metabolomics - prefiltered, raw values
+met <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Metabolomics_for_Vicki/FeatureTable_justprefiltered.csv")
+
+# proteomics - prefiltered, raw values
+prot <-  read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/ExpressionTable_justprefiltered.csv")
+
+# class labels
+key <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/SampleKey.csv")
+```
+  
+```{r wrangletran}
+# transcriptomics
+tran <- data.frame(tran)
+tran <- tran[,-1] # remove first index column
+tran <- tran %>% dplyr::select(-external_gene_name)
+rownames(tran) <- tran$EnsembleID # move features from first column to row names
+tran <- tran[,-1]
+names(tran) <- names(tran) %>% str_replace("_C", "") %>% str_replace("_D", "")
+```
+  
+```{r wrangletranlog}
+# Impute missing data
+# Replace missing values with 1/2 minimum relative peak intensity detected in dataset
+logtran <- tran
+logtran[logtran==0] <- NA # convert zeros to missing
+## Identify minimum
+mintran <- as.numeric(min(as.matrix(logtran), na.rm=TRUE))
+
+## Replace missing values with 1/2 minima
+logtran[is.na(logtran)] <- mintran/2
+
+# Log transform
+logtran <- log10(logtran)
+```
+  
+```{r wranglemet, message=FALSE}
+# metabolomics
+met <- data.frame(met)
+met <- met[-1,] # remove row with class labels
+rownames(met) <- met[,1] # move features from first column to row names
+met <- met[,-1]
+# Order samples to match transcriptomics data set
+met<-met[names(tran)]
+
+# metabolomics - prefiltered, missing data imputed, raw values for log transformation
+logmet <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Metabolomics_for_Vicki/FeatureTable_prefiltered.csv", skip=1)
+
+logmet <- data.frame(logmet)
+rownames(logmet) <- logmet[,1] # move features from first column to row names
+logmet <- logmet[,-1]
+names(logmet) <- names(met)
+
+# Log transform
+logmet <- log10(logmet)
+
+# Order samples to match transcriptomics data set
+logmet<-logmet[names(tran)]
+```
+  
+```{r wrangleprot}
+# proteomics
+prot <- data.frame(prot)
+prot <- prot[-1,] # remove row with class labels
+rownames(prot) <- prot$mz_mz # move features from first column to row names
+prot <- prot[,-1]
+
+# create data set with labels for samples with missing data
+prot5 <- prot
+prot5[,((ncol(prot5))+1):(ncol(prot5)+length(names(tran)[!names(tran)%in%names(prot)]))] <- NA
+names(prot5)[((ncol(prot5)+1)-(length(names(tran)[!names(tran)%in%names(prot)]))):ncol(prot5)] <- names(tran)[!names(tran)%in%names(prot)]
+# Order samples to match transcriptomics data set
+prot5<-prot5[names(tran)]
+```
+  
+```{r wranglelab}
+key <- data.frame(key)
+key <- key %>% dplyr::select(-CenterID, -CodedID) %>% dplyr::rename(ID=IIDPID, Class=Group)
+```
+  
+# Transcriptomics and metabolomics
+  
+## Run xMWAS
+```{r setoutput_tranmet3, message=FALSE}
+
+
+output<-"C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/"
+```
+  
+```{r xmwas_tranmet3, eval=FALSE}
+#Please see user manual for description of arguments:
+#https://github.com/kuppal2/xMWAS/blob/master/example_manual_tutorial/xMWAS-manual.pdf
+
+#integrate transcriptomics and metabolomics data sets since all samples aren't represented in proteomics data
+xmwas_res<-run_xmwas(Xome_data=tran,Yome_data=logmet,Zome_data=NA,Wome_data=NA,outloc=output,
+classlabels=key,class_fname=NA,xmwasmethod="spls",plsmode="canonical",
+max_xvar=nrow(tran)*0.3, #e.g. select top 10000 of the variables in X dataset based on relative standard deviation; change according to your dataset; you can also use proportion such as round(nrow(xMat)*0.3) to select top 30% of the variables.
+max_yvar=nrow(logmet)*0.3, 
+max_zvar=5000, 
+max_wvar=5000, 
+rsd.filt.thresh=1,
+corthresh=0.5, #absolute correlation threshold
+keepX=1000, #select up to top 1000 variables in the sPLS model; change according to your dataset
+keepY=1000, #select up to top 1000 variables in the sPLS model; change according to your dataset
+keepZ=1000, #select up to top 1000 variables in the sPLS model; change according to your dataset
+keepW=1000, #select up to top 1000 variables in the sPLS model; change according to your dataset
+pairedanalysis=FALSE, #set to TRUE if repeated measures study design
+optselect=TRUE, #perform optimal PLS component selection; TRUE or FALSE; set to FALSE for exact Pearson correlation calculation using PLS regression
+rawPthresh=0.05, #p-value threshold for correlation based on Student's t-test
+numcomps=10, #max number of PLS components to use; set to N-1 (N: number of samples) for exact Pearson correlation calculation using PLS regression
+net_edge_colors=c("red","black"),
+net_node_colors=c("orange", "green","cyan","pink"),
+Xname="Transcripts", #change the name of dataset X
+Yname="Metabolites", #change the name of dataset Y
+#Zname="Cytokine", #change the name of dataset Z
+#Wname="W", #change the name of dataset W
+net_node_shape=c("square","circle","triangle","star"),
+all.missing.thresh=NA, #filter based on missing values: set to NA to turn it OFF; otherwise specify a value between: 0 to 1 (e.g. 0.8 to require that at least 80% of the samples have a non-missing value)
+missing.val=0,
+seednum=08162023,label.cex=0.2,vertex.size=6,
+interactive=TRUE,max_connections=NA,
+centrality_method="eigenvector", #centrality evaluation method
+use.X.reference=FALSE,removeRda=TRUE,
+compare.classes=TRUE, #compare classes: TRUE or FALSE
+graphclustering=TRUE,
+class.comparison.allvar=TRUE,
+modularity.weighted=TRUE,
+globalcomparison=TRUE,
+plot.pairwise=FALSE, #plot results for pairwise comparisons: TRUE or FALSE
+apply.sparse.class.comparison=TRUE, #perform variable selection in sPLS during class-wise comparison (default: FALSE)
+layout.type="fr1")
+```
+  
+```{r centralitycomp_allnodes_tranmet, fig.height=4, fig.width=4}
+## Read in results for controls
+res.control <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Control/cluster_membership_centrality_Control_table.txt")
+
+## Read in results for diabetic samples
+res.diab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Diabetic/cluster_membership_centrality_Diabetic_table.txt")
+
+cent.control <- res.control %>% dplyr::select(Name, centrality_vec) %>% dplyr::rename(Centrality=centrality_vec) %>% mutate(Network="Non-Diabetic")
+cent.diab <- res.diab %>% dplyr::select(Name, centrality_vec) %>% dplyr::rename(Centrality=centrality_vec) %>% mutate(Network="Diabetic")
+
+cent <- rbind(cent.control, cent.diab)
+# Add variable indicating the network for each node
+cent$Network <- factor(cent$Network, levels=c("Non-Diabetic", "Diabetic"))
+
+ggplot(aes(x=Network, y=Centrality), data=cent) +
+  geom_violin(fill="lightgray", draw_quantiles=c(0.5), scale="count", adjust=2.5) +
+  theme_bw() +
+  stat_compare_means(method="wilcox.test", hjust=(-0.02)) +
+  ylab("Eigenvector Centrality")
+
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/CentralityComparison_allfeatures.png", dpi=300)
+```
+  
+```{r centralitycompbyfeature_allnodes_tranmet, fig.height=4, fig.width=8}
+# Add variable indicating the omics data set for each node
+cent <- cent %>% mutate('Node Type'=case_when(
+  grepl("ENSG", cent$Name) ~ "Transcript",
+  grepl("__", cent$Name) ~ "Metabolite"
+))
+cent$`Node Type` <- factor(cent$`Node Type`, levels=c("Transcript", "Metabolite"))
+
+ggplot(aes(x=`Node Type`, y=Centrality), data=cent) +
+  geom_violin(fill="lightgray", draw_quantiles=c(0.5), scale="count", adjust=1) +
+  theme_bw() +
+  ylab("Eigenvector Centrality") +
+  facet_wrap(~Network)
+
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/CentralityComparison_byFeatureType.png", dpi=300)
+
+```
+
+  
+## Annotations of metabolites in networks
+```{r resultssepLOG_control_tranmet, message=FALSE}
+# Get annotations for putative metabolites in network
+
+## Separate features by type
+metres.control <- res.control %>% filter(!grepl("ENSG", res.control$Name)) %>% dplyr::rename(mz_rt=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+tranres.control <- res.control %>% filter(grepl("ENSG", res.control$Name)) %>% dplyr::rename(EnsembleID=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+
+
+metres.control$Community_xMWAS <- factor(metres.control$Community_xMWAS)
+tranres.control$Community_xMWAS <- factor(tranres.control$Community_xMWAS)
+
+## Get full list of metabolites
+allmet <- data.frame(rownames(met))
+names(allmet) <- "mz_rt"
+allmet$mz <- sapply(strsplit(as.character(allmet$mz_rt),"_"),"[[",1)
+allmet$rt <- sapply(strsplit(as.character(allmet$mz_rt),"__"),"[[",2)
+allmet$mz4 <- round(as.numeric(allmet$mz), digits=4)
+
+## Get mummichog annotations for all metabolites
+mumann <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Metabolomics_for_Vicki/Analysis_Houser_2/PathwayAnalysis/1691603859.92.mumresult/tsv/_tentative_featurematch_mumresult.tsv") %>% dplyr::rename(mz4=m.z, KEGG_ID_mummichog=id, match_form_mummichog=match_form, mz_difference_mummichog=mz_difference, Metabolite_mummichog=name, pathway_mummichog=pathway)
+
+## Add mummichog annotations to full list of metabolites
+metres.control.ann <- left_join(allmet, mumann, by="mz4")
+
+## Get t test selected features information
+### Remove columns which would be duplicated upon merging
+selfeat <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Metabolomics_for_Vicki/Analysis_Houser_2/Annotation/ttestraw_merged_annotation.csv") %>% dplyr::select(-(KEGG_ID_mummichog:pathway_mummichog)) %>% dplyr::rename(' -log10p'='-log10(p)')
+
+## Add selected features information with T3DB annotations to full list of metabolites with mummichog annotations
+metres.control.ann <- left_join(metres.control.ann, selfeat, by="mz_rt")
+
+## Add xMWAS results to full data summary we've been creating
+metres.control.ann <- left_join(metres.control.ann, metres.control, by="mz_rt")
+
+## Reorganize data summary
+metres.control.ann <- metres.control.ann %>% dplyr::select(mz_rt, Node_xMWAS:Centrality.eigenvec_xMWAS, pathway_mummichog, KEGG_ID_mummichog, Metabolite_mummichog, match_form_mummichog, mz_difference_mummichog, Class_T3DB:Annotation.confidence.score_T3DB, t.stat:Limma_selected)
+
+
+write_csv(metres.control.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Control/MetaboliteResults_Control_withAnnotation.csv")
+
+```
+  
+```{r resultssepLOG_diab_tranmet, message=FALSE}
+# Get annotations for putative metabolites in network
+
+## Separate features by type
+metres.diab <- res.diab %>% filter(!grepl("ENSG", res.diab$Name)) %>% dplyr::rename(mz_rt=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+tranres.diab <- res.diab %>% filter(grepl("ENSG", res.diab$Name)) %>% dplyr::rename(EnsembleID=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+
+metres.diab$Community_xMWAS <- factor(metres.diab$Community_xMWAS)
+tranres.diab$Community_xMWAS <- factor(tranres.diab$Community_xMWAS)
+
+## Add mummichog annotations to full list of metabolites
+metres.diab.ann <- left_join(allmet, mumann, by="mz4")
+
+## Add selected features information with T3DB annotations to full list of metabolites with mummichog annotations
+metres.diab.ann <- left_join(metres.diab.ann, selfeat, by="mz_rt")
+
+## Add xMWAS results to full data summary we've been creating
+metres.diab.ann <- left_join(metres.diab.ann, metres.diab, by="mz_rt")
+
+## Reorganize data summary
+metres.diab.ann <- metres.diab.ann %>% dplyr::select(mz_rt, Node_xMWAS:Centrality.eigenvec_xMWAS, pathway_mummichog, KEGG_ID_mummichog, Metabolite_mummichog, match_form_mummichog, mz_difference_mummichog, Class_T3DB:Annotation.confidence.score_T3DB, t.stat:Limma_selected)
+
+
+
+write_csv(metres.diab.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Diabetic/MetaboliteResults_Diabetic_withAnnotation.csv")
+
+```
+  
+### Centrality comparison of metabolite communities
+```{r compCentralityLOG_tranmet}
+aggregate(metres.control$Centrality.eigenvec_xMWAS~metres.control$Community_xMWAS, FUN=mean)
+
+aggregate(metres.diab$Centrality.eigenvec_xMWAS~metres.diab$Community_xMWAS, FUN=mean)
+```
+  
+```{r commassignmetsLOG_ann_tranmet}
+# Get annotations for putative metabolites in network
+
+## Add mummichog annotations to full list of metabolites
+metres.all.ann <- left_join(allmet, mumann, by="mz4")
+
+## Add selected features information with T3DB annotations to full list of metabolites with mummichog annotations
+metres.all.ann <- left_join(metres.all.ann, selfeat, by="mz_rt")
+
+# Get community assignments for metabolites in control and diabetic networks and add to full data summary
+comms <- metres.control %>% dplyr::select(mz_rt, Community_xMWAS) %>% dplyr::rename(Community.Control_xMWAS=Community_xMWAS)
+comms <- full_join(comms, metres.diab, by="mz_rt") %>% dplyr::select(mz_rt, Community.Control_xMWAS, Community_xMWAS)  %>% dplyr::rename(Community.Diabetic_xMWAS=Community_xMWAS)
+metres.all.ann <- left_join(metres.all.ann, comms, by="mz_rt")
+
+## Reorganize data summary
+metres.all.ann <- metres.all.ann %>% dplyr::select(mz_rt, Community.Control_xMWAS, Community.Diabetic_xMWAS, pathway_mummichog, KEGG_ID_mummichog, Metabolite_mummichog, match_form_mummichog, mz_difference_mummichog, Class_T3DB:Annotation.confidence.score_T3DB, t.stat:Limma_selected)
+```
+  
+## Explore differences in metabolite community assignments
+```{r commmet_differencesLOG_tranmet}
+# Explore the differences between the metabolites in the control and diabetic networks
+
+print("Overall, to what communities in the control network are metabolites assigned to community 1 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="1") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 2 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 3 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="3") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 4 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="4") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 5 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="5") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 6 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="6") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 7 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="7") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+```
+  
+  
+## Results: xMWAS transcriptomics and metabolomics - metabolites
+  
+#### **`r res.control %>% filter(!grepl("ENSG", res.control$Name)) %>% nrow()` metabolomic features (the maximum permitted equivalent to top 30% of the metabolites based on relative standard deviation) and `r res.control %>% filter(grepl("ENSG", res.control$Name)) %>% nrow()` transcripts were selected in the sPLS analysis for the control network. `r res.diab %>% filter(!grepl("ENSG", res.diab$Name)) %>% nrow()` metabolomic features (the maximum permitted equivalent to top 30% of the metabolites based on relative standard deviation) and `r res.diab %>% filter(grepl("ENSG", res.diab$Name)) %>% nrow()` transcripts were selected in the sPLS analysis for the diabetic network.**  
+  
+#### **`r length(unique(metres.control$Community_xMWAS))` communities were identified in islet samples from non-diabetic control donors, and `r length(unique(metres.diab$Community_xMWAS))` communities were identified in islet samples from diabetic donors.**  
+  
+#### **Control community 1 contained `r metres.control %>% filter(Community_xMWAS=="1") %>% nrow()` metabolites and `r tranres.control %>% filter(Community_xMWAS=="1") %>% nrow()` transcripts.**  
+#### **Control community 2 contained `r metres.control %>% filter(Community_xMWAS=="2") %>% nrow()` metabolites and `r tranres.control %>% filter(Community_xMWAS=="2") %>% nrow()` transcripts.**  
+#### **Control community 3 contained `r metres.control %>% filter(Community_xMWAS=="3") %>% nrow()` metabolites and `r tranres.control %>% filter(Community_xMWAS=="3") %>% nrow()` transcripts.**  
+#### **Control community 4 contained `r metres.control %>% filter(Community_xMWAS=="4") %>% nrow()` metabolites and `r tranres.control %>% filter(Community_xMWAS=="4") %>% nrow()` transcripts.**  
+#### **Control community 5 contained `r metres.control %>% filter(Community_xMWAS=="5") %>% nrow()` metabolites and `r tranres.control %>% filter(Community_xMWAS=="5") %>% nrow()` transcripts.**  
+#### **Control community 6 contained `r metres.control %>% filter(Community_xMWAS=="6") %>% nrow()` metabolites and `r tranres.control %>% filter(Community_xMWAS=="6") %>% nrow()` transcripts.**  
+  
+#### **Diabetic community 1 contained `r metres.diab %>% filter(Community_xMWAS=="1") %>% nrow()` metabolites and `r tranres.diab %>% filter(Community_xMWAS=="1") %>% nrow()` transcripts.**  
+#### **Diabetic community 2 contained `r metres.diab %>% filter(Community_xMWAS=="2") %>% nrow()` metabolites and `r tranres.diab %>% filter(Community_xMWAS=="2") %>% nrow()` transcripts.**  
+#### **Diabetic community 3 contained `r metres.diab %>% filter(Community_xMWAS=="3") %>% nrow()` metabolites and `r tranres.diab %>% filter(Community_xMWAS=="3") %>% nrow()` transcripts.**  
+#### **Diabetic community 4 contained `r metres.diab %>% filter(Community_xMWAS=="4") %>% nrow()` metabolites and `r tranres.diab %>% filter(Community_xMWAS=="4") %>% nrow()` transcripts.**  
+#### **Diabetic community 5 contained `r metres.diab %>% filter(Community_xMWAS=="5") %>% nrow()` metabolites and `r tranres.diab %>% filter(Community_xMWAS=="5") %>% nrow()` transcripts.**  
+#### **Diabetic community 6 contained `r metres.diab %>% filter(Community_xMWAS=="6") %>% nrow()` metabolites and `r tranres.diab %>% filter(Community_xMWAS=="6") %>% nrow()` transcripts.**  
+#### **Diabetic community 7 contained `r metres.diab %>% filter(Community_xMWAS=="7") %>% nrow()` metabolites and `r tranres.diab %>% filter(Community_xMWAS=="7") %>% nrow()` transcripts.**  
+ 
+  
+#### **The greatest connectivity (eigenvector centrality) was found in community 1 for control samples, followed by 3 then 4. The greatest connectivity was found in community 2 for diabetic samples, followed by 4, 1, 5, then 7.**  
+  
+#### **While similar numbers of communities were identified in diabetic and non-diabetic control networks, there was little correspondence among the communities. The majority of features included in the diabetic networks were not included in the control networks, and vice versa. The greatest overlap was between community 2 in controls and community 3 in diabetic samples (`r metres.all.ann %>% filter(Community.Control_xMWAS=="2") %>% filter(Community.Diabetic_xMWAS=="3") %>% nrow()` out of `r metres.all.ann %>% filter(Community.Control_xMWAS=="2") %>% nrow()` [`r round((metres.all.ann %>% filter(Community.Control_xMWAS=="2") %>% filter(Community.Diabetic_xMWAS=="3") %>% nrow())/(metres.all.ann %>% filter(Community.Control_xMWAS=="2") %>% nrow())*100, digits=1)`%] features assigned to community 2 in controls were assigned to community 3 in the diabetic network) followed by the overlap between community 3 in controls and community 6 in diabetic samples (`r metres.all.ann %>% filter(Community.Control_xMWAS=="3") %>% filter(Community.Diabetic_xMWAS=="6") %>% nrow()` out of `r metres.all.ann %>% filter(Community.Control_xMWAS=="3") %>% nrow()` [`r round((metres.all.ann %>% filter(Community.Control_xMWAS=="3") %>% filter(Community.Diabetic_xMWAS=="6") %>% nrow())/(metres.all.ann %>% filter(Community.Control_xMWAS=="3") %>% nrow())*100, digits=1)`%] features assigned to community 3 in controls were assigned to community 6 in the diabetic network).**  
+  
+  
+  
+  
+  
+  
+  
+## Delta centrality - metabolites
+  
+### Get delta centrality for metabolites
+```{r deltaCentralityLOG_tranmet}
+deltcent <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/class-wise_centrality_matrix.txt")
+
+# Ensure that column headers are in correct location
+if(names(deltcent)[5]=="X"){
+  names(deltcent)[2:5] <- names(deltcent)[1:4]
+  names(deltcent)[1] <- "mz_rt"
+}
+
+# Separate data sets
+met.deltcent <- deltcent %>% filter(!grepl("ENSG", deltcent$mz_rt))
+
+# Rename some variables
+met.deltcent <- met.deltcent %>% dplyr::rename(Centrality.allClasses=allClasses, Centrality.Control=Control, Centrality.Diabetic=Diabetic, dCentrality.Diabetic_vs_Control=Diabetic_vs_Control)
+
+# Retain putative metabolites with delta centrality>0.1 between diabetic and control samples
+sigmet.deltcent <- met.deltcent %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+```
+  
+### Get annotations for metabolites with greatest delta centrality
+```{r deltaCentralityLOG_ann_tranmet}
+# Get annotations for putative metabolites in network
+
+## Add delta centrality information to full data summary we created
+metres.all.ann <- left_join(metres.all.ann, met.deltcent, by="mz_rt")
+
+
+## Reorganize data summary
+metres.all.ann <- metres.all.ann %>% dplyr::select(mz_rt, Centrality.allClasses, Centrality.Control, Community.Control_xMWAS, Centrality.Diabetic, Community.Diabetic_xMWAS,dCentrality.Diabetic_vs_Control, pathway_mummichog, KEGG_ID_mummichog, Metabolite_mummichog, match_form_mummichog, mz_difference_mummichog, Class_T3DB:Annotation.confidence.score_T3DB, t.stat:Limma_selected) %>% arrange(desc(dCentrality.Diabetic_vs_Control))
+
+
+
+write_csv(metres.all.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Results_AllMetabolites_withAnnotation.csv")
+
+
+## Putative metabolites with high delta centrality
+sigmetres.all.ann <- metres.all.ann %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+```
+  
+### Explore differences in community assignments for metabolites with high delta centrality
+```{r commmet_deltaCentrality_differencesLOG_tranmet}
+# Explore the differences between the metabolites in the control and diabetic networks
+
+table(sigmetres.all.ann$Community.Control_xMWAS)
+
+table(sigmetres.all.ann$Community.Diabetic_xMWAS)
+
+print("How many of these features assigned to community 2 in diabetic samples are being assigned to community 1 in control samples?")
+sigmetres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% filter(Community.Control_xMWAS=="1") %>% nrow()
+
+print("How many of these features assigned to community 1 in control samples are being assigned to community 2 in diabetic samples?")
+sigmetres.all.ann %>% filter(Community.Control_xMWAS=="1") %>% filter(Community.Diabetic_xMWAS=="2") %>% nrow()
+
+print("To what communities are these features assigned to community 2 in diabetic samples being assigned in control samples?")
+sigmetres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("To what communities are these features assigned to community 1 in control samples being assigned in diabetic samples?")
+sigmetres.all.ann %>% filter(Community.Control_xMWAS=="1") %>% dplyr::select(Community.Diabetic_xMWAS) %>% table(useNA = "ifany")
+
+```
+  
+### Pathway analysis metabolomic features with high delta centrality
+  
+#### Format delta centrality >0.1 data for mummichog
+```{r deltaCentrality_mummichogformat_tranmet}
+# Prepare selected features with delta centrality above threshold for mummichog (Extract mz, rt, p, and statistic)
+mumft.deltcent <- left_join(allmet, met.deltcent, by="mz_rt")
+## Set arbitrary p values around 0.05 to identify features with delta centrality>0.1 between diabetic and control samples
+mumft.deltcent <- mumft.deltcent %>% mutate(psig=case_when(
+  dCentrality.Diabetic_vs_Control>0.1 ~ 0.04,
+  dCentrality.Diabetic_vs_Control<=0.1 | is.na(dCentrality.Diabetic_vs_Control) ~ 0.06
+)) %>% dplyr::select(mz, rt, psig, dCentrality.Diabetic_vs_Control)
+
+# Set delta centrality=0 if metabolite was not included in the network
+mumft.deltcent$dCentrality.Diabetic_vs_Control[is.na(mumft.deltcent$dCentrality.Diabetic_vs_Control)] <- 0
+  
+write.table(mumft.deltcent, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Mummichog_deltcent_input.txt", col.names=TRUE, row.names=FALSE, quote=FALSE, sep="\t")  
+```
+  
+#### Pathway analysis with mummichog
+```{r mummichog_deltaCentrality_tranmet}
+# Run with Python using Anaconda 
+ 
+# Open Anaconda Prompt 
+ 
+# In main user directory, create python 2.7 environment 
+## >conda create --name py2 python=2.7 
+ 
+# navigate to folder you want to work in for mummichog analysis and activate python environment 
+## >activate py2 
+ 
+# Install mummichog1 in that environment 
+## >pip install mummichog1 
+ 
+# To see documentation for mummichog1: 
+## > mummichog1 
+### Output: 
+#### mummichog version 1.0.10 
+ 
+#    Usage example: 
+#    python main.py -f mydata.txt -o myoutput 
+# 
+#       -f, --infile: single file as input, 
+  #            containing all features with tab-delimited columns 
+   #           m/z, retention time, p-value, statistic score 
+# 
+#       -n, --network: network model to use (default human_mfn), 
+  #            [human, human_mfn, mouse, fly, yeast] 
+# 
+#       -o, --output: output file identification string (default 'mcgresult') 
+  #      -k, --workdir: directory for all data files. 
+   #           Default is current directory. 
+# 
+#       -m, --mode: analytical mode of mass spec, [positive, negative, dpj]. 
+  #            Default is dpj, a short version of positive. 
+   #     -u, --instrument: [5, 10, 25, FTMS, ORBITRAP]. 
+    #          Any integer is treated as ppm. Default is 10. 
+     #         Instrument specific functions may be implemented. 
+# 
+#       -p, --permutation: number of permutation to estimate null distributions. 
+  #            Default is 100. 
+   #     -z,   --force_primary_ion: M+H[+] (M-H[-] for negative mode) must be 
+    #          present for a predicted metabolite, [True, False]. 
+     #         Default is False. 
+# 
+#       -c, --cutoff: optional cutoff p-value in user supplied statistics, 
+  #            used to select significant list of features. 
+   #     -e, --evidence: cutoff score for metabolite to be in activity network. 
+    #          Default is 3. 
+     #   -d, --modeling: modeling permutation data, [no, gamma]. 
+      #        Default is gamma. 
+ 
+# > cd C:\Users\mecho\Documents\Hertzberg_Lab\T2D\xMWAS\T2D_xMWAS_outputLOG_mettran\DeltaCentrality_Pathways
+
+# > mummichog1 -fC:\Users\mecho\Documents\Hertzberg_Lab\T2D\xMWAS\T2D_xMWAS_outputLOG_mettran\DeltaCentrality_Pathways\Mummichog_deltcent_input.txt -n human_mfn -o mumresult -m dpj -u 10 -p 1000 -z True -c 0.05 
+```
+  
+  
+#### Refine Pathway Analysis Results
+  
+##### Filter identified pathways based on adjusted p value and overlap size
+```{r refinePathways_deltaCentrality_tranmet, message=FALSE}
+# Import pathway analysis file
+path <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/1700236583.32.mumresult/tsv/mcg_pathwayanalysis_mumresult.tsv")
+
+# Extract second view of the data to get overlap annotations
+overann <- path[which(path[,1]=="Annotation for metabolites in significant pathways")+1:nrow(path),]
+names(overann) <- overann[1,]
+overann <- overann[-1,]
+
+# Trim data frame to only first view of data
+path <- path[1:which(path[,1]=="Annotation for metabolites in significant pathways")-1,]
+
+# Export trimmed pathway analysis file
+write_csv(path, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/1700236583.32.mumresult/tsv/mcg_pathwayanalysis_mumresult.csv")
+
+# Clean import of trimmed pathway analysis file
+path <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/1700236583.32.mumresult/tsv/mcg_pathwayanalysis_mumresult.csv")
+
+# Keep only pathways with padj < 0.05 and overlap size of at least 3 (meaning the pathway analysis identified metabolites that were also identified as differing significantly between the two groups of interest)
+path <- path %>% filter(p.value < 0.05) %>% filter(overlap_size >= 3)
+
+write_csv(path, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Significant_Pathways_deltaCentrality.csv")
+```
+   
+   
+   
+#### Plot pathway analysis results
+```{r pathgraph_deltaCentrality_tranmet, fig.width=9, fig.height=2.5}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- path %>% mutate(Pathways=paste(pathway," (",overlap_size, "/", pathway_size, ")")) %>% mutate(neglogpvalue=-log(p.value))
+
+# Graph pathways by p value
+pathfig <- ggplot(pathg, aes(x=reorder(Pathways, neglogpvalue), y=neglogpvalue)) +
+  geom_bar(stat = "identity", fill="black") +
+  coord_flip() +
+  scale_x_discrete(name="Pathways Associated with\nHigher Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/pathfig_deltaCentrality.png")
+```
+  
+#### Determine direction of metabolite change from one group to another for significant pathways
+```{r pathdirection_deltaCentrality_tranmet, message=FALSE}
+# Extract mzs for overlapping features
+path2 <- path
+path2$used_input_mzs <- path2$used_input_mzs %>% str_replace_all(",", ";")
+overlapmz <- t(str_split(as.character(path2$used_input_mzs),";", simplify = TRUE))
+colnames(overlapmz) <- path$pathway
+
+# Get annotation information just for overlap features
+overlapmzls <- c(overlapmz)
+overann <- overann[overann$`m/z` %in% overlapmzls,]
+write_csv(overann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/overlap_ann_deltaCentrality.csv")
+
+# Get delta centrality for rounded mzs
+metres.dcdir <- metres.all.ann %>% mutate(Centrality.dif=Centrality.Diabetic-Centrality.Control)
+metres.dcdir$mz <- sapply(strsplit(as.character(metres.dcdir$mz_rt),"_"),"[[",1)
+metres.dcdir$mz <- round(as.numeric(metres.dcdir$mz), digits=4)
+metres.dcdir <- metres.dcdir %>% dplyr::select(mz, Centrality.dif)
+
+# Create data frame with pathway, rounded mz, and delta centrality for each input mz from overlap features
+pathtbl2 <- data.frame()
+for(i in 1:ncol(overlapmz)){
+  pathoverlap2 <- data.frame(overlapmz[,i]) %>% mutate(Pathway=colnames(overlapmz)[i])
+  colnames(pathoverlap2)[1] <- "mz"
+  pathoverlap2 <- pathoverlap2 %>% filter(mz != "") %>% dplyr::select(Pathway, mz)
+  pathoverlap2$mz <- as.numeric(pathoverlap2$mz)
+  pathoverlap2 <- left_join(pathoverlap2, metres.dcdir, by="mz")
+  pathoverlap2 <- pathoverlap2 %>% distinct(.keep_all=TRUE)
+  pathtbl2 <- rbind(pathtbl2, pathoverlap2)
+}
+
+# Add metabolite mummichog annotation
+overann.ann <- overann 
+names(overann.ann)[1] <- "mz"
+overann.ann <- overann.ann %>% dplyr::select(mz, name)
+overann.ann$mz <- as.numeric(overann.ann$mz)
+pathtbl2 <- left_join(pathtbl2, overann.ann, by="mz")
+
+pathtbl2 <- pathtbl2 %>% dplyr::select(Pathway, mz, Centrality.dif, name) %>% distinct()
+
+
+# Create column just distinguishing metabolites
+pathtbl2$feature <- c(1:nrow(pathtbl2))
+```
+  
+```{r plotdirfeatures_deltaCentrality_tranmet, fig.height=5, fig.width=27}
+fcplot <- ggplot(pathtbl2, aes(x=feature, y=Centrality.dif)) +
+  geom_bar(stat = "identity", aes(fill=Pathway)) +
+  coord_flip() +
+  geom_text(size=3, label=pathtbl2$name) +
+  scale_x_discrete(name="Overlap Features", labels=pathtbl2$name) +
+  ylab("Centrality difference in diabetic islets network") +
+  theme(axis.text.x = element_text(face="bold", size=12, angle=0),
+        axis.text.y = element_text(face="bold", size=12, angle=0))
+  
+fcplot
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/dcfeatures_in_pathways_deltaCentrality.png")
+```
+  
+```{r replotpathfig_deltaCentrality_tranmet, fig.width=9, fig.height=2.5}
+# Add approximate direction of change to pathway graphing df
+pathg$Direction <- "Mixed"
+
+# Graph pathways by p value, including approximate direction of change
+pathfig <- ggplot(pathg, aes(x=reorder(Pathways, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("red", "gray", "black")) +
+  coord_flip() +
+  scale_x_discrete(name="Pathways Associated with\nHigher Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0),
+        legend.position = "top")
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/pathfig_wcolor_deltaCentrality.png")
+```
+  
+  
+### Results: delta centrality - metabolites
+  
+#### **`r nrow(sigmet.deltcent)` metabolomic features had a difference in eigenvector centrality score >0.1 between diabetic sample and non-diabetic control sample networks (delta centrality). This means that these were the putative metabolites for which there was the greatest difference between diabetic and non-diabetic samples in their connectivity within the network.**  
+  
+#### **When we performed pathway analysis with these `r nrow(sigmet.deltcent)` metabolomic features, one pathway with overlap >=3 and padj < 0.05 was identified: glycosphingolipid metabolism. Tentative annotations for features assigned to this pathway were galactosylsphingosine or psychosine, psychosine sulfate, and FADH2. Of these, psychosine sulfate had higher centrality in the diabetic network while FADH2 and galactosylsphingosine or psychosine had higher centrality in the control network.**  
+  
+#### **We also observed that among the metabolomic features with delta centrality >0.1, the vast majority included in the control network were from community 1 while the vast majority included in the diabetic network were from community 2. This does not reflect a simple difference in community label between the networks, as only `r sigmetres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% filter(Community.Control_xMWAS=="1") %>% nrow()` metabolomic features with high delta centrality assigned to community 2 in diabetic samples were assigned to community 1 in control samples.**  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+## Annotations of transcripts in networks
+```{r tranannLOG_control_tranmet, message=FALSE}
+# Get annotations for transcripts in network
+
+## Get full list of transcripts
+alltran <- data.frame(rownames(tran))
+names(alltran) <- "EnsembleID"
+
+## Get gene names for all transcripts
+tranann <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Genomics_for_Vicki/NewAnalysis/ExpressionData_filtered.csv") %>% dplyr::rename(GeneName=external_gene_name) %>% dplyr::select(EnsembleID, GeneName)
+
+
+## Add transcript names to full list of transcripts
+tranres.control.ann <- left_join(alltran, tranann, by="EnsembleID")
+
+## Get DGE selected features information
+seltran <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Genomics_for_Vicki/NewAnalysis/DGEdataframe_filtered.csv") %>% dplyr::rename(EnsembleID=Gene_names, DtoC.log2FC=log2FC, DGE.pvalue=pvalue, DGE.rank=rank) %>% dplyr::select(EnsembleID:DGE.rank) 
+
+## Add selected features information to full list of transcripts with names
+tranres.control.ann <- left_join(tranres.control.ann, seltran, by="EnsembleID")
+
+## Add xMWAS results to full data summary we've been creating
+tranres.control.ann <- left_join(tranres.control.ann, tranres.control, by="EnsembleID")
+
+## Reorganize data summary
+tranres.control.ann <- tranres.control.ann %>% dplyr::select(EnsembleID, GeneName, Node_xMWAS:Centrality.eigenvec_xMWAS, DtoC.log2FC:DGE.rank)
+
+
+write_csv(tranres.control.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Control/TranscriptResults_Control_withAnnotation.csv")
+
+```
+  
+```{r tranannLOG_diab_tranmet, message=FALSE}
+# Get annotations for transcripts in network
+
+## Add transcript names to full list of transcripts
+tranres.diab.ann <- left_join(alltran, tranann, by="EnsembleID")
+
+## Add selected features information to full list of transcripts with names
+tranres.diab.ann <- left_join(tranres.diab.ann, seltran, by="EnsembleID")
+
+## Add xMWAS results to full data summary we've been creating
+tranres.diab.ann <- left_join(tranres.diab.ann, tranres.diab, by="EnsembleID")
+
+## Reorganize data summary
+tranres.diab.ann <- tranres.diab.ann %>% dplyr::select(EnsembleID, GeneName, Node_xMWAS:Centrality.eigenvec_xMWAS, DtoC.log2FC:DGE.rank)
+
+
+
+write_csv(tranres.diab.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Diabetic/TranscriptResults_Diabetic_withAnnotation.csv")
+
+```
+  
+### Centrality comparison of transcript communities
+```{r compCentrality_tran_LOG_tranmet}
+aggregate(tranres.control$Centrality.eigenvec_xMWAS~tranres.control$Community_xMWAS, FUN=mean)
+
+aggregate(tranres.diab$Centrality.eigenvec_xMWAS~tranres.diab$Community_xMWAS, FUN=mean)
+```
+  
+```{r commassignmets_tran_LOG_ann_tranmet}
+# Get annotations for transcripts in network
+
+## Add transcript names to full list of transcripts
+tranres.all.ann <- left_join(alltran, tranann, by="EnsembleID")
+
+## Add selected features information to full list of transcripts with names
+tranres.all.ann <- left_join(tranres.all.ann, seltran, by="EnsembleID")
+
+# Get community assignments for transcripts in control and diabetic networks and add to full data summary
+comms <- tranres.control %>% dplyr::select(EnsembleID, Community_xMWAS) %>% dplyr::rename(Community.Control_xMWAS=Community_xMWAS)
+comms <- full_join(comms, tranres.diab, by="EnsembleID") %>% dplyr::select(EnsembleID, Community.Control_xMWAS, Community_xMWAS)  %>% dplyr::rename(Community.Diabetic_xMWAS=Community_xMWAS)
+tranres.all.ann <- left_join(tranres.all.ann, comms, by="EnsembleID")
+
+## Reorganize data summary
+tranres.all.ann <- tranres.all.ann %>% dplyr::select(EnsembleID, GeneName, Community.Control_xMWAS, Community.Diabetic_xMWAS, DtoC.log2FC:DGE.rank)
+```
+  
+## Explore differences in transcript community assignments
+```{r trancomm_differencesLOG_tranmet}
+# Explore the differences between the transcripts in the control and diabetic networks
+
+print("Overall, to what communities in the control network are transcripts assigned to community 1 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="1") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 2 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 3 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="3") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 4 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="4") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 5 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="5") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 6 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="6") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 7 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="7") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+```
+  
+  
+## Results: xMWAS transcriptomics and metabolomics - transcripts
+    
+#### **In the control samples network, metabolites had higher centrality scores than transcripts on average. In the diabetic samples network, transcripts had higher centrality scores than metabolites.**  
+    
+#### **The greatest connectivity (eigenvector centrality) was found in community 2 for diabetic samples, followed by 1, 4, 5, 7, 3, and then 6 - similar to the findings for metabolites. Centrality scores above 0 for transcripts in the control network were rarely observed.**  
+  
+#### **There was more overlap between the transcripts included in the two networks than there was between the metabolites. Community 1 in the control network contained the majority of the transcripts in the control analysis (`r tranres.all.ann %>% filter(Community.Control_xMWAS=="1") %>% nrow()` out of `r res.control %>% filter(grepl("ENSG", res.control$Name)) %>%  nrow()`, `r round(((tranres.all.ann %>% filter(Community.Control_xMWAS=="1") %>% nrow())/(res.control %>% filter(grepl("ENSG", res.control$Name)) %>%  nrow())*100), digits=1)`%). With the exception of community 5, a notable percentage of transcripts in the other communities in the diabetic sample network were included in community 1 in the control network.**  
+
+  
+  
+  
+  
+  
+  
+  
+## Delta centrality - transcripts
+  
+### Get delta centrality for transcripts
+```{r tran_deltaCentralityLOG_tranmet}
+# Separate data sets
+tran.deltcent <- deltcent %>% filter(grepl("ENSG", deltcent$mz_rt)) %>% dplyr::rename(EnsembleID=mz_rt)
+                                     
+# Rename some variables
+tran.deltcent <- tran.deltcent %>% dplyr::rename(Centrality.allClasses=allClasses, Centrality.Control=Control, Centrality.Diabetic=Diabetic, dCentrality.Diabetic_vs_Control=Diabetic_vs_Control)
+
+# Retain transcripts with delta centrality>0.1 between diabetic and control samples
+sigtran.deltcent <- tran.deltcent %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+```
+  
+### Get annotations for transcripts with greatest delta centrality
+```{r tran_deltaCentralityLOG_ann_tranmet}
+# Get annotations for transcripts in network
+
+## Add delta centrality information to full data summary we created
+tranres.all.ann <- left_join(tranres.all.ann, tran.deltcent, by="EnsembleID")
+
+## Reorganize data summary
+tranres.all.ann <- tranres.all.ann %>% dplyr::select(EnsembleID, GeneName, Centrality.allClasses, Centrality.Control, Community.Control_xMWAS, Centrality.Diabetic, Community.Diabetic_xMWAS, dCentrality.Diabetic_vs_Control, DtoC.log2FC:DGE.rank) %>% arrange(desc(dCentrality.Diabetic_vs_Control))
+
+write_csv(tranres.all.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Results_Alltranscripts_withAnnotation.csv")
+
+## transcripts with high delta centrality
+sigtranres.all.ann <- tranres.all.ann %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+
+# Get raw delta centrality for diabetic vs control networks
+tranres.dcdir <- tranres.all.ann %>% mutate(Centrality.dif=Centrality.Diabetic-Centrality.Control)
+tranres.dcdir <- tranres.dcdir %>% dplyr::select(GeneName, Centrality.dif)
+```
+  
+### Explore differences in community assignments for transcripts with high delta centrality
+```{r commtran_deltaCentrality_differencesLOG_tranmet}
+# Explore the differences between the transcripts in the control and diabetic networks
+
+table(sigtranres.all.ann$Community.Control_xMWAS)
+
+table(sigtranres.all.ann$Community.Diabetic_xMWAS)
+
+print("How many of these features assigned to community 2 in diabetic samples are being assigned to community 1 in control samples?")
+sigtranres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% filter(Community.Control_xMWAS=="1") %>% nrow()
+
+print("How many of these features assigned to community 1 in control samples are being assigned to community 2 in diabetic samples?")
+sigtranres.all.ann %>% filter(Community.Control_xMWAS=="1") %>% filter(Community.Diabetic_xMWAS=="2") %>% nrow()
+
+print("To what communities are these features assigned to community 2 in diabetic samples being assigned in control samples?")
+sigtranres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+```
+  
+### Pathway enrichment analysis (GSEA) transcripts with high delta centrality
+  
+#### Format delta centrality >0.1 data for GSEA
+```{r tran_deltaCentrality_GSEAformat_tranmet}
+# Get just gene names and raw change in centrality between networks, which will be the ranking for GSEA
+gsea.centdif <- tranres.dcdir %>% dplyr::rename(rank=Centrality.dif)
+
+# Fill in missing centrality difference values (for those genes not included in the networks) with "0"
+gsea.centdif$rank[is.na(gsea.centdif$rank)] <- 0
+
+ranks <- as.numeric(gsea.centdif$rank)
+names(ranks) <- gsea.centdif$GeneName
+ranks <- sort(ranks, decreasing=TRUE)
+
+# Identify duplicates
+duplicates <- names(ranks)[duplicated(names(ranks)) | duplicated(names(ranks), fromLast = TRUE)]
+print(duplicates)
+
+# Retain the highest value among duplicates
+ranks_unique <- tapply(ranks, INDEX = names(ranks), FUN = max)
+ranks <- sort(ranks_unique, decreasing=TRUE)
+```
+  
+#### Gene Ontology enrichment analysis
+```{r gmtGO_deltaCentrality_tranmet}
+# Import .gmt file with pathway information by gene symbol (Gene sets derived from the GO ontology)
+## Obtained from GSEA 3-6-2023 http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+go <- gmtPathways("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/c5.go.v2023.1.Hs.symbols.gmt")
+```
+  
+```{r pathfgseaGO_deltaCentrality_tranmet}
+set.seed(08162023)
+
+fgseaRes <- fgsea(pathways = go, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+    
+```{r gseaGO_deltaCentrality_pathsel_tranmet}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Transcripts/fgseaRes_GO.txt", sep="\t", sep2=c("", " ", ""))
+
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Transcripts/fgseaRes_GO.txt")
+
+# Replace pathtab values with those from fgseaRes in case of issues with read-in
+pathtab$pval <- fgseaRes$pval
+pathtab$padj <- fgseaRes$padj
+pathtab$ES <- fgseaRes$ES
+pathtab$NES <- fgseaRes$NES
+
+
+# Select top 10 up-regulated pathways (centrality of transcripts is basically 0 in control networks, so no down-regulated pathways here)
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+# Clean up pathway names
+topup$pathway <- topup$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+topup$Direction[1:10] <- "Up"
+
+topup <- topup[order(topup$pval),]
+topup <- topup %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+
+
+# Write cleaned table
+write_csv(topup, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Transcripts/Top_GSEA_Pathways_GO.csv")
+```
+  
+#### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r sigpathgraph_deltaCentrality_GO_tranmet, fig.width=11, fig.height=6}
+# Summarize pathway information and create negative log p value variable for graphing
+# Black = delta centrality higher in diabetic network
+pathg <- topup %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(aes(fill = ifelse(ES < 0, "red", "black")), stat = "identity") +
+  scale_fill_identity() +  # Ensure the colors are applied as specified
+  coord_flip() +
+  scale_x_discrete(name="Pathways Associated with Greatest Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Transcripts/pathsigfig_GO.png")
+
+
+```
+  
+  
+#### KEGG pathway enrichment analysis
+```{r gmtKEGG_deltaCentrality_tranmet}
+# Import .gmt file with pathway information by gene symbol (Gene sets derived from the KEGG pathway database)
+## Obtained from GSEA 3-6-2023 http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+kegg <- gmtPathways("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/Pathways/c2.cp.kegg.v2023.1.Hs.symbols.gmt")
+```
+  
+```{r pathfgseaKEGG_deltaCentrality_tranmet}
+set.seed(08162023)
+
+fgseaRes <- fgsea(pathways = kegg, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+    
+```{r gseaKEGG_deltaCentrality_pathsel_tranmet}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Transcripts/fgseaRes_KEGG.txt", sep="\t", sep2=c("", " ", ""))
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Transcripts/fgseaRes_KEGG.txt")
+
+
+# Select top 10 up-regulated pathways (centrality of transcripts is basically 0 in control networks, so no down-regulated pathways here)
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+# Clean up pathway names
+topup$pathway <- topup$pathway %>% str_replace("KEGG_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+topup$Direction[1:10] <- "Up"
+
+topup <- topup[order(topup$pval),]
+topup <- topup %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+
+
+# Write cleaned table
+write_csv(topup, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Transcripts/Top_GSEA_Pathways_KEGG.csv")
+```
+  
+#### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r sigpathgraph_deltaCentrality_KEGG_tranmet, fig.width=11, fig.height=2.5}
+# Summarize pathway information and create negative log p value variable for graphing
+# Black = delta centrality higher in diabetic network
+pathg <- topup %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(aes(fill = ifelse(ES < 0, "red", "black")), stat = "identity") +
+  scale_fill_identity() +  # Ensure the colors are applied as specified
+  coord_flip() +
+  scale_x_discrete(name="Pathways Associated with\nGreatest Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/DeltaCentrality_Pathways/Transcripts/pathsigfig_KEGG.png")
+
+
+```
+  
+    
+### Results: delta centrality - transcripts
+  
+#### **`r nrow(sigtran.deltcent)` transcripts had a difference in eigenvector centrality score >0.1 between diabetic sample and non-diabetic control sample networks (delta centrality). Transcript centrality was higher in the diabetic network than the control, so these were the transcripts with the greatest increase in connectivity in diabetic vs control networks.**  
+  
+#### **When we performed gene set enrichment analysis (GSEA) with these `r nrow(sigtran.deltcent)` transcripts with higher centrality in the diabetic network, the top 10 GO biological processes associated with them were cytoplasmic sequestering of transcription factor, atrioventricular canal development, non-membrane-spanning protein tyrosine phosphatase activity, negative regulation of interleukin 6 production, positive regulation of lymphocyte migration, protein serine kinase activity, protein serine threonine kinase activity, response to muramyl dipeptide, positive regulation of T cell migration, and negative regulation of antigen receptor-mediated signaling pathway. The KEGG pathways significantly (FDR<0.1) associated with these transcripts were GNRH signaling and intestinal immune network for IGA production.**  
+  
+#### **We also observed that among the transcripts with delta centrality >0.1 (`r nrow(sigtran.deltcent)`), the vast majority (`r sigtranres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% nrow()`, `r round(((sigtranres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% nrow())/(nrow(sigtran.deltcent))*100), digits=1)`%) were from community 2 in the diabetic network.**  
+  
+  
+
+  
+
+
+  
+  
+  
+  
+  
+# Transcriptomics, metabolomics, and proteomics
+```{r cleanup_tranmet}
+rm(comms, deltcent, fcplot, i, met.deltcent, metres.all.ann, metres.control, metres.control.ann, metres.dcdir, metres.diab, metres.diab.ann, mintran, mumft.control, mumft.deltcent, overann, overann.ann, overlapmz, overlapmzls, path, path2, pathfig, pathg, pathoverlap2, pathtbl2, res.control, res.diab, sigmet.deltcent, sigmetres.all.ann, tranres.control, tranres.control.ann, tranres.diab, tranres.diab.ann)
+```
+  
+## Run xMWAS
+```{r setoutput_tranmetprot}
+output<-"C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/"
+```
+  
+```{r xmwas_tranmetprot, message=FALSE, eval=FALSE}
+#Please see user manual for description of arguments:
+#https://github.com/kuppal2/xMWAS/blob/master/example_manual_tutorial/xMWAS-manual.pdf
+
+#integrate transcriptomics and metabolomics data sets since all samples aren't represented in proteomics data
+xmwas_res<-run_xmwas(Xome_data=tran,Yome_data=logmet,Zome_data=prot5,Wome_data=NA,outloc=output,
+classlabels=key,class_fname=NA,xmwasmethod="spls",plsmode="canonical",
+max_xvar=nrow(tran)*0.3, #e.g. select top 10000 of the variables in X dataset based on relative standard deviation; change according to your dataset; you can also use proportion such as round(nrow(xMat)*0.3) to select top 30% of the variables.
+max_yvar=nrow(logmet)*0.3, 
+max_zvar=nrow(prot5)*0.3, 
+max_wvar=5000, 
+rsd.filt.thresh=1,
+corthresh=0.5, #absolute correlation threshold
+keepX=1000, #select up to top 1000 variables in the sPLS model; change according to your dataset
+keepY=1000, #select up to top 1000 variables in the sPLS model; change according to your dataset
+keepZ=1000, #select up to top 1000 variables in the sPLS model; change according to your dataset
+keepW=1000, #select up to top 1000 variables in the sPLS model; change according to your dataset
+pairedanalysis=FALSE, #set to TRUE if repeated measures study design
+optselect=TRUE, #perform optimal PLS component selection; TRUE or FALSE; set to FALSE for exact Pearson correlation calculation using PLS regression
+rawPthresh=0.05, #p-value threshold for correlation based on Student's t-test
+numcomps=10, #max number of PLS components to use; set to N-1 (N: number of samples) for exact Pearson correlation calculation using PLS regression
+net_edge_colors=c("red","black"),
+net_node_colors=c("orange", "green","cyan","pink"),
+Xname="Transcripts", #change the name of dataset X
+Yname="Metabolites", #change the name of dataset Y
+Zname="Proteins", #change the name of dataset Z
+#Wname="W", #change the name of dataset W
+net_node_shape=c("square","circle","triangle","star"),
+all.missing.thresh=NA, #filter based on missing values: set to NA to turn it OFF; otherwise specify a value between: 0 to 1 (e.g. 0.8 to require that at least 80% of the samples have a non-missing value)
+missing.val=0,
+seednum=08162023,label.cex=0.2,vertex.size=6,
+interactive=TRUE,max_connections=NA,
+centrality_method="eigenvector", #centrality evaluation method
+use.X.reference=FALSE,removeRda=TRUE,
+compare.classes=TRUE, #compare classes: TRUE or FALSE
+graphclustering=TRUE,
+class.comparison.allvar=TRUE,
+modularity.weighted=TRUE,
+globalcomparison=TRUE,
+plot.pairwise=FALSE, #plot results for pairwise comparisons: TRUE or FALSE
+apply.sparse.class.comparison=TRUE, #perform variable selection in sPLS during class-wise comparison (default: FALSE)
+layout.type="fr1")
+```  
+  
+```{r centralitycomp_allnodes_tranmetprot, fig.height=4, fig.width=4}
+## Read in results for controls
+res.control <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Control/cluster_membership_centrality_Control_table.txt")
+
+## Read in results for diabetic samples
+res.diab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Diabetic/cluster_membership_centrality_Diabetic_table.txt")
+
+cent.control <- res.control %>% dplyr::select(Name, centrality_vec) %>% dplyr::rename(Centrality=centrality_vec) %>% mutate(Network="Non-Diabetic")
+cent.diab <- res.diab %>% dplyr::select(Name, centrality_vec) %>% dplyr::rename(Centrality=centrality_vec) %>% mutate(Network="Diabetic")
+
+cent <- rbind(cent.control, cent.diab)
+# Add variable indicating network for each node
+cent$Network <- factor(cent$Network, levels=c("Non-Diabetic", "Diabetic"))
+
+ggplot(aes(x=Network, y=Centrality), data=cent) +
+  geom_violin(fill="lightgray", draw_quantiles=c(0.5), scale="count", adjust=3.5) +
+  theme_bw() +
+  stat_compare_means(method="wilcox.test", hjust=(-0.02)) +
+  ylab("Eigenvector Centrality")
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/CentralityComparison_allfeatures.png", dpi=300)
+```
+  
+```{r centralitycompbyfeature_allnodes_tranmetprot, fig.height=4, fig.width=8}
+# Add variable indicating the omics data set for each node
+cent <- cent %>% mutate('Node Type'=case_when(
+  grepl("ENSG", cent$Name) ~ "Transcript",
+  grepl("__", cent$Name) ~ "Metabolite",
+  grepl("[0-9]_[0-9]", cent$Name) ~ "Protein",
+))
+cent$`Node Type` <- factor(cent$`Node Type`, levels=c("Transcript", "Metabolite", "Protein"))
+
+ggplot(aes(x=`Node Type`, y=Centrality), data=cent) +
+  geom_boxplot(width=0.2) +
+  geom_violin(fill="lightgray", scale="count", adjust=2) +
+  theme_bw() +
+  ylab("Eigenvector Centrality") +
+  facet_wrap(~Network)
+
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/CentralityComparison_byFeatureType.png", dpi=300)
+
+```
+  
+## Annotations of metabolites in networks
+```{r resultssepLOG_control_tranmetprot, message=FALSE}
+# Get annotations for putative metabolites in network
+
+## Separate features by type
+metres.control <- res.control %>% filter(grepl("__", res.control$Name)) %>% dplyr::rename(mz_rt=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+tranres.control <- res.control %>% filter(grepl("ENSG", res.control$Name)) %>% dplyr::rename(EnsembleID=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+protres.control <- res.control %>% filter(grepl("\\d_\\d", res.control$Name)) %>% dplyr::rename(EnsembleID=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+
+
+metres.control$Community_xMWAS <- factor(metres.control$Community_xMWAS)
+tranres.control$Community_xMWAS <- factor(tranres.control$Community_xMWAS)
+protres.control$Community_xMWAS <- factor(protres.control$Community_xMWAS)
+
+## Add mummichog annotations to full list of metabolites
+metres.control.ann <- left_join(allmet, mumann, by="mz4")
+
+## Add selected features information with T3DB annotations to full list of metabolites with mummichog annotations
+metres.control.ann <- left_join(metres.control.ann, selfeat, by="mz_rt")
+
+## Add xMWAS results to full data summary we've been creating
+metres.control.ann <- left_join(metres.control.ann, metres.control, by="mz_rt")
+
+## Reorganize data summary
+metres.control.ann <- metres.control.ann %>% dplyr::select(mz_rt, Node_xMWAS:Centrality.eigenvec_xMWAS, pathway_mummichog, KEGG_ID_mummichog, Metabolite_mummichog, match_form_mummichog, mz_difference_mummichog, Class_T3DB:Annotation.confidence.score_T3DB, t.stat:Limma_selected)
+
+
+write_csv(metres.control.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Control/MetaboliteResults_Control_withAnnotation.csv")
+
+```
+  
+```{r resultssepLOG_diab_tranmetprot, message=FALSE}
+# Get annotations for putative metabolites in network
+
+## Separate features by type
+metres.diab <- res.diab %>% filter(grepl("__", res.diab$Name)) %>% dplyr::rename(mz_rt=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+tranres.diab <- res.diab %>% filter(grepl("ENSG", res.diab$Name)) %>% dplyr::rename(EnsembleID=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+protres.diab <- res.diab %>% filter(grepl("\\d_\\d", res.diab$Name)) %>% dplyr::rename(EnsembleID=Name, Community_xMWAS=Cluster, Node_xMWAS=Node, Centrality.eigenvec_xMWAS=centrality_vec)
+
+metres.diab$Community_xMWAS <- factor(metres.diab$Community_xMWAS)
+tranres.diab$Community_xMWAS <- factor(tranres.diab$Community_xMWAS)
+protres.diab$Community_xMWAS <- factor(protres.diab$Community_xMWAS)
+
+## Add mummichog annotations to full list of metabolites
+metres.diab.ann <- left_join(allmet, mumann, by="mz4")
+
+## Add selected features information with T3DB annotations to full list of metabolites with mummichog annotations
+metres.diab.ann <- left_join(metres.diab.ann, selfeat, by="mz_rt")
+
+## Add xMWAS results to full data summary we've been creating
+metres.diab.ann <- left_join(metres.diab.ann, metres.diab, by="mz_rt")
+
+## Reorganize data summary
+metres.diab.ann <- metres.diab.ann %>% dplyr::select(mz_rt, Node_xMWAS:Centrality.eigenvec_xMWAS, pathway_mummichog, KEGG_ID_mummichog, Metabolite_mummichog, match_form_mummichog, mz_difference_mummichog, Class_T3DB:Annotation.confidence.score_T3DB, t.stat:Limma_selected)
+
+
+
+write_csv(metres.diab.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Diabetic/MetaboliteResults_Diabetic_withAnnotation.csv")
+
+```
+  
+### Centrality comparison of metabolite communities
+```{r compCentralityLOG_tranmetprot}
+aggregate(metres.control$Centrality.eigenvec_xMWAS~metres.control$Community_xMWAS, FUN=mean)
+
+aggregate(metres.diab$Centrality.eigenvec_xMWAS~metres.diab$Community_xMWAS, FUN=mean)
+```
+  
+```{r commassignmetsLOG_ann_tranmetprot}
+# Get annotations for putative metabolites in network
+
+## Add mummichog annotations to full list of metabolites
+metres.all.ann <- left_join(allmet, mumann, by="mz4")
+
+## Add selected features information with T3DB annotations to full list of metabolites with mummichog annotations
+metres.all.ann <- left_join(metres.all.ann, selfeat, by="mz_rt")
+
+# Get community assignments for metabolites in control and diabetic networks and add to full data summary
+comms <- metres.control %>% dplyr::select(mz_rt, Community_xMWAS) %>% dplyr::rename(Community.Control_xMWAS=Community_xMWAS)
+comms <- full_join(comms, metres.diab, by="mz_rt") %>% dplyr::select(mz_rt, Community.Control_xMWAS, Community_xMWAS)  %>% dplyr::rename(Community.Diabetic_xMWAS=Community_xMWAS)
+metres.all.ann <- left_join(metres.all.ann, comms, by="mz_rt")
+
+## Reorganize data summary
+metres.all.ann <- metres.all.ann %>% dplyr::select(mz_rt, Community.Control_xMWAS, Community.Diabetic_xMWAS, pathway_mummichog, KEGG_ID_mummichog, Metabolite_mummichog, match_form_mummichog, mz_difference_mummichog, Class_T3DB:Annotation.confidence.score_T3DB, t.stat:Limma_selected)
+```
+  
+## Explore differences in metabolite community assignments
+```{r commmet_differencesLOG_tranmetprot}
+# Explore the differences between the metabolites in the control and diabetic networks
+
+print("Overall, to what communities in the control network are metabolites assigned to community 1 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="1") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 2 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 3 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="3") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 4 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="4") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 5 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="5") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are metabolites assigned to community 6 in diabetic samples assigned?")
+metres.all.ann %>% filter(Community.Diabetic_xMWAS=="6") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+```
+  
+  
+## Results: xMWAS transcriptomics, metabolomics, and proteomics - metabolites
+  
+#### **`r nrow(metres.control)` metabolomic features (the maximum permitted equivalent to top 30% of the metabolites based on relative standard deviation), `r nrow(tranres.control)` transcripts, and `r nrow(protres.control)` proteins (the maximum permitted equivalent to top 30% of the proteins based on relative standard deviation) were selected in the sPLS analysis for the control network. `r nrow(metres.diab)` metabolomic features (the maximum permitted equivalent to top 30% of the metabolites based on relative standard deviation), `r nrow(tranres.diab)` transcripts, and `r nrow(protres.diab)` proteins (the maximum permitted equivalent to top 30% of the proteins based on relative standard deviation) were selected in the sPLS analysis for the diabetic network.**  
+  
+#### **`r length(unique(metres.control$Community_xMWAS))` communities were identified in islet samples from non-diabetic control donors, and `r length(unique(metres.diab$Community_xMWAS))` communities were identified in islet samples from diabetic donors.**  
+  
+#### **Control community 1 contained `r metres.control %>% filter(Community_xMWAS=="1") %>% nrow()` metabolites, `r tranres.control %>% filter(Community_xMWAS=="1") %>% nrow()` transcripts, and `r protres.control %>% filter(Community_xMWAS=="1") %>% nrow()` proteins.**  
+#### **Control community 2 contained `r metres.control %>% filter(Community_xMWAS=="2") %>% nrow()` metabolites, `r tranres.control %>% filter(Community_xMWAS=="2") %>% nrow()` transcripts, and `r protres.control %>% filter(Community_xMWAS=="2") %>% nrow()` proteins.**  
+#### **Control community 3 contained `r metres.control %>% filter(Community_xMWAS=="3") %>% nrow()` metabolites, `r tranres.control %>% filter(Community_xMWAS=="3") %>% nrow()` transcripts, and `r protres.control %>% filter(Community_xMWAS=="3") %>% nrow()` proteins.**  
+#### **Control community 4 contained `r metres.control %>% filter(Community_xMWAS=="4") %>% nrow()` metabolites, `r tranres.control %>% filter(Community_xMWAS=="4") %>% nrow()` transcripts, and `r protres.control %>% filter(Community_xMWAS=="4") %>% nrow()` proteins.**  
+#### **Control community 5 contained `r metres.control %>% filter(Community_xMWAS=="5") %>% nrow()` metabolites, `r tranres.control %>% filter(Community_xMWAS=="5") %>% nrow()` transcripts, and `r protres.control %>% filter(Community_xMWAS=="5") %>% nrow()` proteins.**  
+  
+#### **Diabetic community 1 contained `r metres.diab %>% filter(Community_xMWAS=="1") %>% nrow()` metabolites, `r tranres.diab %>% filter(Community_xMWAS=="1") %>% nrow()` transcripts, and `r protres.diab %>% filter(Community_xMWAS=="1") %>% nrow()` proteins.**  
+#### **Diabetic community 2 contained `r metres.diab %>% filter(Community_xMWAS=="2") %>% nrow()` metabolites, `r tranres.diab %>% filter(Community_xMWAS=="2") %>% nrow()` transcripts, and `r protres.diab %>% filter(Community_xMWAS=="2") %>% nrow()` proteins.**  
+#### **Diabetic community 3 contained `r metres.diab %>% filter(Community_xMWAS=="3") %>% nrow()` metabolites, `r tranres.diab %>% filter(Community_xMWAS=="3") %>% nrow()` transcripts, and `r protres.diab %>% filter(Community_xMWAS=="3") %>% nrow()` proteins.**  
+#### **Diabetic community 4 contained `r metres.diab %>% filter(Community_xMWAS=="4") %>% nrow()` metabolites, `r tranres.diab %>% filter(Community_xMWAS=="4") %>% nrow()` transcripts, and `r protres.diab %>% filter(Community_xMWAS=="4") %>% nrow()` proteins.**  
+#### **Diabetic community 5 contained `r metres.diab %>% filter(Community_xMWAS=="5") %>% nrow()` metabolites, `r tranres.diab %>% filter(Community_xMWAS=="5") %>% nrow()` transcripts, and `r protres.diab %>% filter(Community_xMWAS=="5") %>% nrow()` proteins.**  
+#### **Diabetic community 6 contained `r metres.diab %>% filter(Community_xMWAS=="6") %>% nrow()` metabolites, `r tranres.diab %>% filter(Community_xMWAS=="6") %>% nrow()` transcripts, and `r protres.diab %>% filter(Community_xMWAS=="6") %>% nrow()` proteins.**  
+  
+#### **Proteins were only included in 3 communities in each network. In the control network, community 1 is dominated by transcripts. In the diabetic network, community 3 is dominated by metabolites.**  
+  
+#### **The greatest connectivity (eigenvector centrality) was found in community 1 for control samples, decreasing in each successive community. The greatest connectivity was found in community 5 for diabetic samples, followed by 6, 4, 2, 3, then 1.**  
+  
+#### **While similar numbers of communities were identified in diabetic and non-diabetic control networks, there was little correspondence among the communities. The majority of metabolomic features included in the diabetic networks were not included in the control networks, and vice versa; however, in most communities, over a third of the metabolites were also included in the other network, spread across its communities. The greatest overlap in the diabetic network was in community 3, with 48.3% of its metabolites also found in the control network, while the smallest overlap was in diabetic network community 6, with only 19.6% of its metabolites found in the control network.**  
+  
+  
+  
+  
+  
+  
+  
+## Delta centrality - metabolites
+  
+### Get delta centrality for metabolites
+```{r deltaCentralityLOG_tranmetprot}
+deltcent <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/class-wise_centrality_matrix.txt")
+
+# Ensure that column headers are in correct location
+if(!is.na(names(deltcent)[5])){
+  names(deltcent)[2:5] <- names(deltcent)[1:4]
+  names(deltcent)[1] <- "mz_rt"
+}
+
+# Separate data sets
+met.deltcent <- deltcent
+met.deltcent$mz_rt <- rownames(met.deltcent)
+met.deltcent <- met.deltcent %>% dplyr::select(mz_rt, names(met.deltcent)[1:4]) %>% filter(grepl("__", met.deltcent$mz_rt))
+
+# Rename some variables
+met.deltcent <- met.deltcent %>% dplyr::rename(Centrality.allClasses=allClasses, Centrality.Control=Control, Centrality.Diabetic=Diabetic, dCentrality.Diabetic_vs_Control=Diabetic_vs_Control)
+
+# Retain putative metabolites with delta centrality>0.1 between diabetic and control samples
+sigmet.deltcent <- met.deltcent %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+```
+  
+### Get annotations for metabolites with greatest delta centrality
+```{r deltaCentralityLOG_ann_tranmetprot}
+# Get annotations for putative metabolites in network
+
+## Add delta centrality information to full data summary we created
+metres.all.ann <- left_join(metres.all.ann, met.deltcent, by="mz_rt")
+
+
+## Reorganize data summary
+metres.all.ann <- metres.all.ann %>% dplyr::select(mz_rt, Centrality.allClasses, Centrality.Control, Community.Control_xMWAS, Centrality.Diabetic, Community.Diabetic_xMWAS,dCentrality.Diabetic_vs_Control, pathway_mummichog, KEGG_ID_mummichog, Metabolite_mummichog, match_form_mummichog, mz_difference_mummichog, Class_T3DB:Annotation.confidence.score_T3DB, t.stat:Limma_selected) %>% arrange(desc(dCentrality.Diabetic_vs_Control))
+
+
+
+write_csv(metres.all.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Results_AllMetabolites_withAnnotation.csv")
+
+
+## Putative metabolites with high delta centrality
+sigmetres.all.ann <- metres.all.ann %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+```
+  
+### Explore differences in community assignments for metabolites with high delta centrality
+```{r commmet_deltaCentrality_differencesLOG_tranmetprot}
+# Explore the differences between the metabolites in the control and diabetic networks
+
+table(sigmetres.all.ann$Community.Control_xMWAS)
+
+table(sigmetres.all.ann$Community.Diabetic_xMWAS)
+
+print("To what communities are these features assigned to community 4 in diabetic samples being assigned in control samples?")
+sigmetres.all.ann %>% filter(Community.Diabetic_xMWAS=="4") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("To what communities are these features assigned to community 5 in diabetic samples being assigned in control samples?")
+sigmetres.all.ann %>% filter(Community.Diabetic_xMWAS=="5") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("To what communities are these features assigned to community 6 in diabetic samples being assigned in control samples?")
+sigmetres.all.ann %>% filter(Community.Diabetic_xMWAS=="6") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("To what communities are these features assigned to community 1 in control samples being assigned in diabetic samples?")
+sigmetres.all.ann %>% filter(Community.Control_xMWAS=="1") %>% dplyr::select(Community.Diabetic_xMWAS) %>% table(useNA = "ifany")
+
+print("To what communities are these features assigned to community 2 in control samples being assigned in diabetic samples?")
+sigmetres.all.ann %>% filter(Community.Control_xMWAS=="2") %>% dplyr::select(Community.Diabetic_xMWAS) %>% table(useNA = "ifany")
+```
+  
+### Pathway analysis metabolomic features with high delta centrality
+  
+#### Format delta centrality >0.1 data for mummichog
+```{r deltaCentrality_mummichogformat_tranmetprot}
+# Prepare selected features with delta centrality above threshold for mummichog (Extract mz, rt, p, and statistic)
+mumft.deltcent <- left_join(allmet, met.deltcent, by="mz_rt")
+## Set arbitrary p values around 0.05 to identify features with delta centrality>0.1 between diabetic and control samples
+mumft.deltcent <- mumft.deltcent %>% mutate(psig=case_when(
+  dCentrality.Diabetic_vs_Control>0.1 ~ 0.04,
+  dCentrality.Diabetic_vs_Control<=0.1 | is.na(dCentrality.Diabetic_vs_Control) ~ 0.06
+)) %>% dplyr::select(mz, rt, psig, dCentrality.Diabetic_vs_Control)
+
+# Set delta centrality=0 if metabolite was not included in the network
+mumft.deltcent$dCentrality.Diabetic_vs_Control[is.na(mumft.deltcent$dCentrality.Diabetic_vs_Control)] <- 0
+
+  
+write.table(mumft.deltcent, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Mummichog_deltcent_input.txt", col.names=TRUE, row.names=FALSE, quote=FALSE, sep="\t")  
+```
+  
+#### Pathway analysis with mummichog
+```{r mummichog_deltaCentrality_tranmetprot}
+# Run with Python using Anaconda 
+
+# > cd C:\Users\mecho\Documents\Hertzberg_Lab\T2D\xMWAS\T2D_xMWAS_output_mettranprot\DeltaCentrality_Pathways
+
+# > mummichog1 -fC:\Users\mecho\Documents\Hertzberg_Lab\T2D\xMWAS\T2D_xMWAS_output_mettranprot\DeltaCentrality_Pathways\Mummichog_deltcent_input.txt -n human_mfn -o mumresult -m dpj -u 10 -p 1000 -z True -c 0.05 
+```
+  
+  
+#### Refine Pathway Analysis Results
+  
+##### Filter identified pathways based on adjusted p value and overlap size
+```{r refinePathways_deltaCentrality_tranmetprot, message=FALSE}
+# Import pathway analysis file
+path <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/1700235234.67.mumresult/tsv/mcg_pathwayanalysis_mumresult.tsv")
+
+# Extract second view of the data to get overlap annotations
+overann <- path[which(path[,1]=="Annotation for metabolites in significant pathways")+1:nrow(path),]
+names(overann) <- overann[1,]
+overann <- overann[-1,]
+
+# Trim data frame to only first view of data
+path <- path[1:which(path[,1]=="Annotation for metabolites in significant pathways")-1,]
+
+# Export trimmed pathway analysis file
+write_csv(path, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/1700235234.67.mumresult/tsv/mcg_pathwayanalysis_mumresult.csv")
+
+# Clean import of trimmed pathway analysis file
+path <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/1700235234.67.mumresult/tsv/mcg_pathwayanalysis_mumresult.csv")
+
+# Keep only pathways with padj < 0.05 and overlap size of at least 3 (meaning the pathway analysis identified metabolites that were also identified as differing significantly between the two groups of interest)
+path <- path %>% filter(p.value < 0.05) %>% filter(overlap_size >= 3)
+
+write_csv(path, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Significant_Pathways_deltaCentrality.csv")
+```
+   
+   
+   
+#### Plot pathway analysis results
+```{r pathgraph_deltaCentrality_tranmetprot, fig.width=9, fig.height=7}
+# Summarize pathway information and create negative log p value variable for graphing
+pathg <- path %>% mutate(Pathways=paste(pathway," (",overlap_size, "/", pathway_size, ")")) %>% mutate(neglogpvalue=-log(p.value))
+
+# We confirmed that all putative metabolites assigned to the "Drug metabolism - other enzymes" pathway were cancer drugs or their derivatives. Remove these as unreliable.
+pathg <- pathg %>% filter(pathway != "Drug metabolism - other enzymes")
+
+# Graph pathways by p value
+pathfig <- ggplot(pathg, aes(x=reorder(Pathways, neglogpvalue), y=neglogpvalue)) +
+  geom_bar(stat = "identity", fill="black") +
+  coord_flip() +
+  scale_x_discrete(name="Metabolic Pathways Associated with Greater Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/pathfig_deltaCentrality.png")
+```
+  
+#### Determine direction of metabolite change from one group to another for significant pathways
+```{r pathdirection_deltaCentrality_tranmetprot, message=FALSE, warning=FALSE}
+# Extract mzs for overlapping features
+path2 <- path 
+path2 <- path2 %>% filter(pathway != "Drug metabolism - other enzymes")
+path2$used_input_mzs <- path2$used_input_mzs %>% str_replace_all(",", ";")
+overlapmz <- t(str_split(as.character(path2$used_input_mzs),";", simplify = TRUE))
+colnames(overlapmz) <- path2$pathway
+
+
+# Get annotation information just for overlap features
+overlapmzls <- c(overlapmz)
+overann <- overann[overann$`m/z` %in% overlapmzls,]
+write_csv(overann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/overlap_ann_deltaCentrality.csv")
+
+# Get delta centrality for rounded mzs
+metres.dcdir <- metres.all.ann %>% mutate(Centrality.dif=Centrality.Diabetic-Centrality.Control)
+metres.dcdir$mz <- sapply(strsplit(as.character(metres.dcdir$mz_rt),"_"),"[[",1)
+metres.dcdir$mz <- round(as.numeric(metres.dcdir$mz), digits=4)
+metres.dcdir <- metres.dcdir %>% dplyr::select(mz, Centrality.dif)
+
+# Create data frame with pathway, rounded mz, and delta centrality for each input mz from overlap features
+pathtbl2 <- data.frame()
+for(i in 1:ncol(overlapmz)){
+  pathoverlap2 <- data.frame(overlapmz[,i]) %>% mutate(Pathway=colnames(overlapmz)[i])
+  colnames(pathoverlap2)[1] <- "mz"
+  pathoverlap2 <- pathoverlap2 %>% filter(mz != "") %>% dplyr::select(Pathway, mz)
+  pathoverlap2$mz <- as.numeric(pathoverlap2$mz)
+  pathoverlap2 <- left_join(pathoverlap2, metres.dcdir, by="mz")
+  pathoverlap2 <- pathoverlap2 %>% distinct(.keep_all=TRUE)
+  pathtbl2 <- rbind(pathtbl2, pathoverlap2)
+}
+
+# Add metabolite mummichog annotation
+overann.ann <- overann 
+names(overann.ann)[1] <- "mz"
+overann.ann <- overann.ann %>% dplyr::select(mz, name)
+overann.ann$mz <- as.numeric(overann.ann$mz)
+pathtbl2 <- left_join(pathtbl2, overann.ann, by="mz")
+
+pathtbl2 <- pathtbl2 %>% dplyr::select(Pathway, mz, Centrality.dif, name) %>% distinct()
+pathtbl2$Pathway <- factor(pathtbl2$Pathway)
+
+
+# Create column just distinguishing metabolites
+pathtbl2$feature <- c(1:nrow(pathtbl2))
+```
+  
+```{r plotdirfeatures_deltaCentrality_tranmetprot, fig.height=50, fig.width=27}
+fcplot <- ggplot(pathtbl2, aes(x=feature, y=Centrality.dif)) +
+  geom_bar(stat = "identity", aes(fill=Pathway)) +
+  coord_flip() +
+  geom_text(size=3, label=pathtbl2$name) +
+  scale_x_discrete(name="Overlap Features", labels=pathtbl2$name) +
+  ylab("Centrality difference in diabetic islets network") +
+  theme(axis.text.x = element_text(face="bold", size=12, angle=0),
+        axis.text.y = element_text(face="bold", size=12, angle=0))
+  
+fcplot
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/dcfeatures_in_pathways_deltaCentrality.png")
+
+
+selpath <- c("Fatty acid activation", "Fatty Acid Metabolism", "Mono-unsaturated fatty acid beta-oxidation", "Di-unsaturated fatty acid beta-oxidation", "Omega-3 fatty acid metabolism", "Omega-6 fatty acid metabolism", "Porphyrin metabolism")
+pathtbl2sel <- pathtbl2 %>% filter(Pathway %in% selpath)
+pathtbl2sel$feature <- c(1:nrow(pathtbl2sel))
+
+ggplot(pathtbl2sel, aes(x=feature, y=Centrality.dif)) +
+  geom_bar(stat = "identity", aes(fill=Pathway)) +
+  coord_flip() +
+  geom_text(size=3, label=pathtbl2sel$name) +
+  scale_x_discrete(name="Overlap Features", labels=pathtbl2sel$name) +
+  ylab("Centrality difference in diabetic islets network") +
+  theme(axis.text.x = element_text(face="bold", size=12, angle=0),
+        axis.text.y = element_text(face="bold", size=12, angle=0))
+  
+```
+  
+```{r replotpathfig_deltaCentrality_tranmetprot, fig.width=9, fig.height=7}
+# Add approximate direction of change to pathway graphing df
+pathg$Direction <- "Mixed"
+pathg[which(pathg$pathway=="Fatty acid activation"),which(names(pathg)=="Direction")] <- "Up"
+pathg[which(pathg$pathway=="Fatty Acid Metabolism"),which(names(pathg)=="Direction")] <- "Up"
+pathg[which(pathg$pathway=="Mono-unsaturated fatty acid beta-oxidation"),which(names(pathg)=="Direction")] <- "Up"
+pathg[which(pathg$pathway=="Di-unsaturated fatty acid beta-oxidation"),which(names(pathg)=="Direction")] <- "Up"
+pathg[which(pathg$pathway=="Omega-3 fatty acid metabolism"),which(names(pathg)=="Direction")] <- "Up"
+pathg[which(pathg$pathway=="Omega-6 fatty acid metabolism"),which(names(pathg)=="Direction")] <- "Up"
+pathg[which(pathg$pathway=="Porphyrin metabolism"),which(names(pathg)=="Direction")] <- "Up"
+
+pathg$Direction <- factor(pathg$Direction, levels=c("Down", "Mixed", "Up"))
+
+
+# Graph pathways by p value, including approximate direction of change
+pathfig <- ggplot(pathg, aes(x=reorder(Pathways, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("gray", "black", "red")) +
+  coord_flip() +
+  scale_x_discrete(name="Metabolic Pathways Associated with Greater Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0),
+        legend.position = "top")
+
+pathfig
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/pathfig_wcolors_deltaCentrality.png")
+```
+  
+### Plot select features with high delta centrality and T3DB annotations
+#### Features more central in diabetic network and more abundant in T2D
+  
+```{r difindvdf, message=FALSE}
+# Get peak intensities for each sample for annotated significant features  
+col_names <- names(read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Metabolomics_for_Vicki/FeatureTable_prefiltered.csv", n_max = 0))
+ftgrp <- read.csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Metabolomics_for_Vicki/FeatureTable_prefiltered.csv", skip=1)
+names(ftgrp) <- col_names
+rownames(ftgrp) <- ftgrp$Sample
+ftgrp <- ftgrp %>% dplyr::select(-Sample)
+ftgrp <- as.matrix(t(ftgrp))
+ftgrp <- data.frame(ftgrp)
+ftgrp$ID <- rownames(ftgrp)
+ftgrp <- left_join(key, ftgrp, by="ID")
+ftgrp <- data.frame(ftgrp)
+names(ftgrp) <- names(ftgrp) %>% str_replace_all("X", "")
+ftgrp$Class <- factor(ftgrp$Class, levels=c("Control", "Diabetic"))
+
+ftgrp.Fig <- ftgrp
+ftgrp.Fig$Group <- factor(ftgrp.Fig$Class, levels=c("Control", "Diabetic"), labels=c("Non-Diabetic", "Diabetic"))
+```
+  
+```{r}
+# Get delta centrality for each selected feature
+deltcent.Fig <- met.deltcent %>% filter(mz_rt=="757.7240175__447.7894104" | mz_rt=="641.3240435__390.4792756" | mz_rt=="403.0289599__91.20977236") %>% dplyr::select(Centrality.Control, Centrality.Diabetic)
+
+deltcent.Fig <- t(deltcent.Fig) %>% as.matrix() %>% data.frame()
+names(deltcent.Fig) <- names(deltcent.Fig) %>% str_replace_all("X", "")
+deltcent.Fig <- deltcent.Fig %>% filter(rownames(deltcent.Fig) != "mz_rt")
+deltcent.Fig$Group <- c("Non-Diabetic", "Diabetic")
+deltcent.Fig$Group <- factor(deltcent.Fig$Group, levels=c("Non-Diabetic", "Diabetic"))
+```
+  
+```{r, plot_T3DBann_hiDC_hiT2D, fig.height=6, fig.width=8}
+a <- ggplot(aes(x=Group, y=deltcent.Fig$'757.7240175__447.7894104'), data=deltcent.Fig) +
+  geom_boxplot() +
+  geom_point() +
+  ggtitle(paste("757.7240175__447.7894104", "Hexachlorobiphenyl (T3DB)", sep="\n"), ) +
+  ylab("Eigenvector Centrality in Diabetic\nvs Non-Diabetic Network") +
+  ylim(c(-0.1, 1)) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        plot.title=element_text(size=9, face="plain"))
+
+b <- ggplot(aes(x=Group, y=deltcent.Fig$'641.3240435__390.4792756'), data=deltcent.Fig) +
+  geom_boxplot() +
+  geom_point() +
+  ggtitle(paste("641.3240435__390.4792756", "Zinc oleate (T3DB)", sep="\n")) +
+  ylab("Eigenvector Centrality in Diabetic\nvs Non-Diabetic Network") +
+  ylim(c(-0.1, 1)) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        plot.title=element_text(size=9, face="plain"))
+
+c <- ggplot(aes(x=Group, y=deltcent.Fig$'403.0289599__91.20977236'), data=deltcent.Fig) +
+  geom_boxplot() +
+  geom_point() +
+  ggtitle(paste("403.0289599__91.20977236", "Acifluorfen (T3DB) / dTDP /\nMelanin / DCVG (Mummichog)", sep="\n")) +
+  ylab("Eigenvector Centrality in Diabetic\nvs Non-Diabetic Network") +
+  ylim(c(-0.1, 1)) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        plot.title=element_text(size=9, face="plain"))
+
+
+d <- ggplot(aes(x=Group, y=ftgrp.Fig$'757.7240175__447.7894104'), data=ftgrp.Fig) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(width=0.08, size=2) +
+  ylab(paste("757.7240175__447.7894104", "Hexachlorobiphenyl (T3DB)", sep="\n")) +
+  theme_bw() +
+  theme(axis.title.x=element_blank())
+
+e <- ggplot(aes(x=Group, y=ftgrp.Fig$'641.3240435__390.4792756'), data=ftgrp.Fig) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(width=0.08, size=2) +
+  ylab(paste("641.3240435__390.4792756", "Zinc oleate (T3DB)", sep="\n")) +
+  theme_bw() +
+  theme(axis.title.x=element_blank())
+
+f <- ggplot(aes(x=Group, y=ftgrp.Fig$'403.0289599__91.20977236'), data=ftgrp.Fig) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(width=0.08, size=2) +
+  ylab(paste("403.0289599__91.20977236", "Acifluorfen (T3DB)\ndTDP / Melanin / DCVG (Mummichog)", sep="\n")) +
+  theme_bw() +
+  theme(axis.title.x=element_blank())
+
+ggarrange(a, b, c, d, e, f, nrow=2, ncol=3)
+
+ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Mets_with_T3DBann_hiT2D_hiDC.png", dpi=300)
+```
+
+  
+### Results: delta centrality - metabolites
+  
+#### **`r nrow(sigmet.deltcent)` metabolomic features had a difference in eigenvector centrality score >0.1 between diabetic sample and non-diabetic control sample networks (delta centrality). This means that these were the putative metabolites for which there was the greatest difference between diabetic and non-diabetic samples in their connectivity within the network.**  
+  
+#### **When we performed pathway analysis with these `r nrow(sigmet.deltcent)` metabolomic features, 25 pathways with overlap >=3 and padj < 0.05 were identified. These were related to fatty acid metabolism (particularly activation and oxidation), drug metabolism, amino acid metabolism, porphyrin metabolism, pyrimidine metabolism, TCA cycle, and glycosphingolipid metabolism.**  
+  
+#### **Putative metabolites with delta centrality >0.1 were found in all communities in both networks. However:**  
+#### **`r round((sigmetres.all.ann %>% filter(Community.Control_xMWAS=="1") %>% nrow())/(metres.control %>% filter(Community_xMWAS=="1") %>% nrow())*100, digits=0)`% of metabolites in control network community 1 had delta centrality >0.1.**  
+#### **`r round((sigmetres.all.ann %>% filter(Community.Control_xMWAS=="2") %>% nrow())/(metres.control %>% filter(Community_xMWAS=="2") %>% nrow())*100, digits=0)`% of metabolites in control network community 2 had delta centrality >0.1.**  
+#### **`r round((sigmetres.all.ann %>% filter(Community.Diabetic_xMWAS=="4") %>% nrow())/(metres.diab %>% filter(Community_xMWAS=="4") %>% nrow())*100, digits=0)`% of metabolites in diabetic network community 4 had delta centrality >0.1.**  
+#### **`r round((sigmetres.all.ann %>% filter(Community.Diabetic_xMWAS=="5") %>% nrow())/(metres.diab %>% filter(Community_xMWAS=="5") %>% nrow())*100, digits=0)`% of metabolites in diabetic network community 5 had delta centrality >0.1.**  
+#### **`r round((sigmetres.all.ann %>% filter(Community.Diabetic_xMWAS=="6") %>% nrow())/(metres.diab %>% filter(Community_xMWAS=="6") %>% nrow())*100, digits=0)`% of metabolites in diabetic network community 6 had delta centrality >0.1.**  
+#### **There was little correspondence among these communities across the networks.**  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+## Annotations of transcripts in networks
+```{r tranannLOG_control_tranmetprot, message=FALSE}
+# Get annotations for transcripts in network
+
+## Add transcript names to full list of transcripts
+tranres.control.ann <- left_join(alltran, tranann, by="EnsembleID")
+
+## Add selected features information to full list of transcripts with names
+tranres.control.ann <- left_join(tranres.control.ann, seltran, by="EnsembleID")
+
+## Add xMWAS results to full data summary we've been creating
+tranres.control.ann <- left_join(tranres.control.ann, tranres.control, by="EnsembleID")
+
+## Reorganize data summary
+tranres.control.ann <- tranres.control.ann %>% dplyr::select(EnsembleID, GeneName, Node_xMWAS:Centrality.eigenvec_xMWAS, DtoC.log2FC:DGE.rank)
+
+
+write_csv(tranres.control.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Control/TranscriptResults_Control_withAnnotation.csv")
+
+```
+  
+```{r tranannLOG_diab_tranmetprot, message=FALSE}
+# Get annotations for transcripts in network
+
+## Add transcript names to full list of transcripts
+tranres.diab.ann <- left_join(alltran, tranann, by="EnsembleID")
+
+## Add selected features information to full list of transcripts with names
+tranres.diab.ann <- left_join(tranres.diab.ann, seltran, by="EnsembleID")
+
+## Add xMWAS results to full data summary we've been creating
+tranres.diab.ann <- left_join(tranres.diab.ann, tranres.diab, by="EnsembleID")
+
+## Reorganize data summary
+tranres.diab.ann <- tranres.diab.ann %>% dplyr::select(EnsembleID, GeneName, Node_xMWAS:Centrality.eigenvec_xMWAS, DtoC.log2FC:DGE.rank)
+
+
+
+write_csv(tranres.diab.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Diabetic/TranscriptResults_Diabetic_withAnnotation.csv")
+
+```
+  
+### Centrality comparison of transcript communities
+```{r compCentrality_tran_LOG_tranmetprot}
+aggregate(tranres.control$Centrality.eigenvec_xMWAS~tranres.control$Community_xMWAS, FUN=mean)
+
+aggregate(tranres.diab$Centrality.eigenvec_xMWAS~tranres.diab$Community_xMWAS, FUN=mean)
+```
+  
+```{r commassignmets_tran_LOG_ann_tranmetprot}
+# Get annotations for transcripts in network
+
+## Add transcript names to full list of transcripts
+tranres.all.ann <- left_join(alltran, tranann, by="EnsembleID")
+
+## Add selected features information to full list of transcripts with names
+tranres.all.ann <- left_join(tranres.all.ann, seltran, by="EnsembleID")
+
+# Get community assignments for transcripts in control and diabetic networks and add to full data summary
+comms <- tranres.control %>% dplyr::select(EnsembleID, Community_xMWAS) %>% dplyr::rename(Community.Control_xMWAS=Community_xMWAS)
+comms <- full_join(comms, tranres.diab, by="EnsembleID") %>% dplyr::select(EnsembleID, Community.Control_xMWAS, Community_xMWAS)  %>% dplyr::rename(Community.Diabetic_xMWAS=Community_xMWAS)
+tranres.all.ann <- left_join(tranres.all.ann, comms, by="EnsembleID")
+
+## Reorganize data summary
+tranres.all.ann <- tranres.all.ann %>% dplyr::select(EnsembleID, GeneName, Community.Control_xMWAS, Community.Diabetic_xMWAS, DtoC.log2FC:DGE.rank)
+```
+  
+## Explore differences in transcript community assignments
+```{r trancomm_differencesLOG_tranmetprot}
+# Explore the differences between the transcripts in the control and diabetic networks
+
+print("Overall, to what communities in the control network are transcripts assigned to community 1 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="1") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 2 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="2") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 3 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="3") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 4 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="4") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 5 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="5") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are transcripts assigned to community 6 in diabetic samples assigned?")
+tranres.all.ann %>% filter(Community.Diabetic_xMWAS=="6") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+```
+  
+  
+## Results: xMWAS transcriptomics, metabolomics, and proteomics - transcripts
+    
+#### **In both control and diabetic networks, metabolites had higher centrality scores than transcripts on average.**  
+    
+#### **The greatest connectivity (eigenvector centrality) among transcripts was found in community 5 for control samples, followed by 3, 2, and 4. The greatest connectivity (eigenvector centrality) was found in community 3 for diabetic samples, followed by 5, 6, 4, 2, and 1.**  
+  
+#### **While similar numbers of communities were identified in diabetic and non-diabetic control networks, there was little correspondence among the communities. The majority of transcripts included in the diabetic networks were not included in the control networks, and vice versa; however, in most communities, around a third of the transcripts were also included in the other network, spread across its communities. The greatest overlap in the diabetic network was in community 4, with 38.6% of its transcripts also found in the control network, while the smallest overlap was in diabetic network community 5, with only 23.2% of its transcripts found in the control network.**  
+
+  
+  
+  
+  
+  
+  
+  
+## Delta centrality - transcripts
+  
+### Get delta centrality for transcripts
+```{r tran_deltaCentralityLOG_tranmetprot}
+# Separate data sets
+tran.deltcent <- deltcent
+tran.deltcent$EnsembleID <- rownames(tran.deltcent)
+tran.deltcent <- tran.deltcent %>% filter(grepl("ENSG", tran.deltcent$EnsembleID))
+                                     
+# Rename some variables
+tran.deltcent <- tran.deltcent %>% dplyr::rename(Centrality.allClasses=allClasses, Centrality.Control=Control, Centrality.Diabetic=Diabetic, dCentrality.Diabetic_vs_Control=Diabetic_vs_Control)
+
+# Retain transcripts with delta centrality>0.1 between diabetic and control samples
+sigtran.deltcent <- tran.deltcent %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+```
+  
+### Get annotations for transcripts with greatest delta centrality
+```{r tran_deltaCentralityLOG_ann_tranmetprot}
+# Get annotations for transcripts in network
+
+## Add delta centrality information to full data summary we created
+tranres.all.ann <- left_join(tranres.all.ann, tran.deltcent, by="EnsembleID")
+
+## Reorganize data summary
+tranres.all.ann <- tranres.all.ann %>% dplyr::select(EnsembleID, GeneName, Centrality.allClasses, Centrality.Control, Community.Control_xMWAS, Centrality.Diabetic, Community.Diabetic_xMWAS, dCentrality.Diabetic_vs_Control, DtoC.log2FC:DGE.rank) %>% arrange(desc(dCentrality.Diabetic_vs_Control))
+
+write_csv(tranres.all.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Results_Alltranscripts_withAnnotation.csv")
+
+## transcripts with high delta centrality
+sigtranres.all.ann <- tranres.all.ann %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+
+# Get raw delta centrality for diabetic vs control networks
+tranres.dcdir <- tranres.all.ann %>% mutate(Centrality.dif=Centrality.Diabetic-Centrality.Control)
+tranres.dcdir <- tranres.dcdir %>% dplyr::select(GeneName, Centrality.dif)
+```
+  
+### Explore differences in community assignments for transcripts with high delta centrality
+```{r commtran_deltaCentrality_differencesLOG_tranmetprot}
+# Explore the differences between the transcripts in the control and diabetic networks
+
+table(sigtranres.all.ann$Community.Control_xMWAS)
+
+table(sigtranres.all.ann$Community.Diabetic_xMWAS)
+
+```
+  
+### Pathway enrichment analysis (GSEA) transcripts with high delta centrality
+  
+#### Format delta centrality >0.1 data for GSEA
+```{r tran_deltaCentrality_GSEAformat_tranmetprot}
+# Get just gene names and raw change in centrality between networks, which will be the ranking for GSEA
+gsea.centdif <- tranres.dcdir %>% dplyr::rename(rank=Centrality.dif)
+
+# Fill in missing centrality difference values (for those genes not included in the networks) with "0"
+gsea.centdif$rank[is.na(gsea.centdif$rank)] <- 0
+
+ranks <- as.numeric(gsea.centdif$rank)
+names(ranks) <- gsea.centdif$GeneName
+ranks <- sort(ranks, decreasing=TRUE)
+
+# Identify duplicates
+duplicates <- names(ranks)[duplicated(names(ranks)) | duplicated(names(ranks), fromLast = TRUE)]
+print(duplicates)
+
+# Retain the highest value among duplicates
+ranks_unique <- tapply(ranks, INDEX = names(ranks), FUN = max)
+ranks <- sort(ranks_unique, decreasing=TRUE)
+```
+  
+#### Gene Ontology enrichment analysis
+```{r pathfgseaGO_deltaCentrality_tranmetprot}
+set.seed(08162023)
+
+fgseaRes <- fgsea(pathways = go, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+    
+```{r gseaGO_deltaCentrality_pathsel_tranmetprot}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Transcripts/fgseaRes_GO.txt", sep="\t", sep2=c("", " ", ""))
+
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Transcripts/fgseaRes_GO.txt")
+
+# Replace pathtab values with those from fgseaRes in case of issues with read-in
+pathtab$pval <- fgseaRes$pval
+pathtab$padj <- fgseaRes$padj
+pathtab$ES <- fgseaRes$ES
+pathtab$NES <- fgseaRes$NES
+
+
+# Select top 10 up-regulated pathways (centrality of transcripts is basically 0 in control networks, so no down-regulated pathways here)
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+topdown <- pathtab %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+top$Direction[1:10] <- "Up"
+top$Direction[11:20] <- "Down"
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+
+
+# Write cleaned table
+write_csv(top, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Transcripts/Top_GSEA_Pathways_GO.csv")
+```
+  
+#### **The number of GO BPs represented (p<0.05) among the transcripts with higher delta centrality was `r pathtab %>% filter(pval<0.05) %>% nrow()`.**  
+#### **The number of GO BPs represented (padj<0.1) among the transcripts with higher delta centrality  was `r pathtab %>% filter(padj<0.1) %>% nrow()`.**  
+  
+  
+#### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r sigpathgraph_deltaCentrality_GO_tranmetprot, fig.width=11, fig.height=6}
+# Summarize pathway information and create negative log p value variable for graphing
+# Black = delta centrality higher in diabetic network
+pathg <- top %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+  # Graph pathways by p value
+if(nrow(pathg)>0){
+  pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(aes(fill = ifelse(ES < 0, "red", "black")), stat = "identity") +
+  scale_fill_identity() +  # Ensure the colors are applied as specified
+  coord_flip() +
+  scale_x_discrete(name="Pathways Associated with Greatest Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Transcripts/pathsigfig_GO.png")
+}
+
+```
+  
+  
+#### KEGG pathway enrichment analysis
+```{r pathfgseaKEGG_deltaCentrality_tranmetprot}
+set.seed(08162023)
+
+fgseaRes <- fgsea(pathways = kegg, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+    
+```{r gseaKEGG_deltaCentrality_pathsel_tranmetprot}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Transcripts/fgseaRes_KEGG.txt", sep="\t", sep2=c("", " ", ""))
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Transcripts/fgseaRes_KEGG.txt")
+
+
+# Select top 10 up-regulated pathways (centrality of transcripts is basically 0 in control networks, so no down-regulated pathways here)
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+topdown <- pathtab %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("KEGG_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+top$Direction[1:10] <- "Up"
+top$Direction[11:20] <- "Down"
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+
+# Write cleaned table
+write_csv(top, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Transcripts/Top_GSEA_Pathways_KEGG.csv")
+```
+  
+#### **The number of KEGG Pathways represented (p<0.05) among the transcripts with higher delta centrality was `r pathtab %>% filter(pval<0.05) %>% nrow()`.**  
+#### **The number of KEGG Pathways represented (padj<0.1) among the transcripts with higher delta centrality was `r pathtab %>% filter(padj<0.1) %>% nrow()`.**  
+  
+  
+#### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r sigpathgraph_deltaCentrality_KEGG_tranmetprot, fig.width=11, fig.height=2.5}
+# Summarize pathway information and create negative log p value variable for graphing
+# Black = delta centrality higher in diabetic network
+pathg <- topup %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+  # Graph pathways by p value
+if(nrow(pathg)>0){
+  pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(aes(fill = ifelse(ES < 0, "red", "black")), stat = "identity") +
+  scale_fill_identity() +  # Ensure the colors are applied as specified
+  coord_flip() +
+  scale_x_discrete(name="Pathways Associated with\nGreatest Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/Transcripts/pathsigfig_KEGG.png")
+}
+
+```
+  
+  
+### Results: delta centrality - transcripts
+  
+#### **`r nrow(sigtran.deltcent)` transcripts had a difference in eigenvector centrality score >0.1 between diabetic sample and non-diabetic control sample networks (delta centrality).**  
+  
+#### **When we performed gene set enrichment analysis (GSEA) with these `r nrow(sigtran.deltcent)` transcripts, no GO or KEGG pathways were identified at FDR<0.1.**  
+  
+#### **Relatively few transcripts had delta centrality >0.1, but 63.5% of the `r tranres.all.ann %>% filter(Community.Control_xMWAS=="3") %>% nrow()` transcripts in control network community 3 and 86.8% of the `r tranres.all.ann %>% filter(Community.Control_xMWAS=="5") %>% nrow()` transcripts in control community 5 met this threshold.**  
+  
+  
+  
+  
+  
+  
+  
+## Annotations of proteins in networks
+```{r protann_tranmetprot, message=FALSE}
+# Get annotations for proteins in network
+
+# Get all annotations for all proteins
+## Import two key files. One has the proteins with mz IDs. The other has some corrected gene symbols.
+protann <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/proteomics_analysis/proteins_key.csv") %>% dplyr::select(-time)
+protann.genesym <- read_xlsx("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/proteomics_analysis/proteins_key.xlsx")
+if(length(which(protann$`Protein names`!=protann.genesym$`Protein names`))==0){
+  protann$`Gene names` <- protann.genesym$`Gene names`
+}
+
+# Convert gene symbols to appropriate format for GSEA (https://www.genenames.org/tools/multi-symbol-checker/)
+## Supply gene symbols for proteins with none assigned originally, where possible.
+protann$`Gene names`[which(protann$`Protein names`=="Uncharacterized protein FLJ45252")] <- "LOC112268437"
+protann$`Gene names`[which(protann$`Protein names`=="Putative inactive maltase-glucoamylase-like protein LOC93432")] <- "MGAM2"
+
+## Correct gene symbols where multiple are provided, where possible
+### If a feature is assigned multiple gene symbols, keep only the first one
+protann$`Gene names`[which(grepl(";", protann$`Gene names`))] <- sapply(strsplit(protann$`Gene names`[which(grepl(";", protann$`Gene names`))],";"),"[[",1)
+
+protann.namestocheck <- protann %>% dplyr::select('Gene names')
+```
+  
+```{r writenamestocheck, eval=FALSE}
+write_delim(protann.namestocheck, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/GeneSymbols_for_Proteins_forHGNC.txt")
+### Open in Notepad, delete quotes around gene symbols that start with "NA" which were introduced as artifacts of the writing.
+```
+  
+```{r protannctd_tranmetprot, message=FALSE}
+### Load gene names into HGNC gene symbol checker: (https://www.genenames.org/tools/multi-symbol-checker/)
+### Download results
+### Open in Notepad, delete top row "sep=,"
+protann.HGNC <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/hgnc-symbol-check_allProteins.csv")
+
+### Get rid of unnecessary duplicate entries (alias included as well as approved symbol)
+for(i in 1:(nrow(protann.HGNC)-1)){
+  if(protann.HGNC$Input[i] %in% protann.HGNC$Input[duplicated(protann.HGNC$Input)] & protann.HGNC$`Match type`[i]=="Alias symbol"){
+    protann.HGNC[i,] <- "REMOVE"
+  }
+}
+protann.HGNC <- protann.HGNC %>% filter(protann.HGNC$Input != "REMOVE")
+
+protann.HGNC <- protann.HGNC %>% dplyr::rename(Approved.symbol=`Approved symbol`)
+
+### Get rid of unnecessary duplicate entries (previous symbol included as well as approved symbol)
+for(i in 1:(nrow(protann.HGNC)-1)){
+  if(protann.HGNC$Input[i] %in% protann.HGNC$Input[duplicated(protann.HGNC$Input)] & protann.HGNC$`Match type`[i]=="Approved symbol"){
+    if(protann.HGNC$`Match type`[i+1]=="Previous symbol"){
+      protann.HGNC[i+1,] <- "REMOVE"
+    }
+  }
+}
+protann.HGNC <- protann.HGNC %>% filter(protann.HGNC$Input != "REMOVE")
+
+
+### Try to annotate unmatched input
+protann.HGNC$Approved.symbol[which(protann.HGNC$Input=="DKFZp686F13224")] <- "FAH"
+protann.HGNC$Approved.symbol[which(protann.HGNC$Input=="DKFZp686I1730")] <- "DGCR2"
+protann.HGNC$Approved.symbol[which(protann.HGNC$Input=="DKFZp781D08126")] <- "RNASEL"
+protann.HGNC$Approved.symbol[which(protann.HGNC$Input=="Em:AP000351.3")] <- "GSTT2B"
+protann.HGNC$Approved.symbol[which(protann.HGNC$Input=="FLJ22184")] <- "PRR36"
+protann.HGNC$Approved.symbol[which(protann.HGNC$Input=="hCG_1988162")] <- "CEBPZOS"
+protann.HGNC$Approved.symbol[which(protann.HGNC$Input=="SEPT15")] <- "SEP15"
+protann.HGNC$Approved.symbol[which(protann.HGNC$Input=="SF3B14")] <- "SF3B6"
+
+### Check for duplicates
+protann.HGNC$Input[duplicated(protann.HGNC$Input)]
+
+### Correct duplicates
+protann.HGNC <- protann.HGNC %>% filter(`Approved.symbol` != "B4GAT1")
+protann.HGNC <- protann.HGNC[-which(protann.HGNC$Input=="QARS" & protann.HGNC$`Approved.symbol`=="EPRS1"),]
+
+protann.HGNC.genesym <- protann.HGNC %>% dplyr::select(Input, Approved.symbol) %>% dplyr::rename(`Gene names`=Input)
+
+protann <- left_join(protann, protann.HGNC.genesym)
+protann <- protann %>% dplyr::select(mz, Approved.symbol, `Protein names`) %>% dplyr::rename(GeneSymbol=Approved.symbol, ProteinName=`Protein names`) 
+```
+  
+```{r protann_control_tranmetprot, message=FALSE}
+# Get all protein IDs
+allprot <- data.frame(rownames(prot))
+names(allprot) <- "mz_mz"
+allprot$mz <- sapply(strsplit(as.character(allprot$mz_mz),"_"),"[[",1)
+allprot$mz <- as.numeric(allprot$mz)
+
+# Get list of proteins differing significantly between groups by limma at p<0.05
+selprot <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/limma_results05.csv") %>% dplyr::select(-adj.P.Val, -ProteinName, -GeneSymbol)
+selprot$mz <- sapply(strsplit(as.character(selprot$mz_mz),"_"),"[[",1)
+selprot$mz <- as.numeric(selprot$mz)
+selprot <- selprot %>% dplyr::select(-mz_mz)
+
+selprotfdr <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/limma_resultsfdr_FDR1.csv") %>% dplyr::select(mz_mz, adj.P.Val)
+selprotfdr$mz <- sapply(strsplit(as.character(selprotfdr$mz_mz),"_"),"[[",1)
+selprotfdr$mz <- as.numeric(selprotfdr$mz)
+selprotfdr <- selprotfdr %>% dplyr::select(-mz_mz)
+
+selprot <- left_join(selprot, selprotfdr, by="mz")
+
+## Add protein names to full list of proteins
+protres.control.ann <- left_join(allprot, protann, by="mz")
+
+## Add selected features information to full list of proteins with names
+protres.control.ann <- left_join(protres.control.ann, selprot, by="mz")
+
+## Add xMWAS results to full data summary we've been creating
+protres.control <- protres.control %>% dplyr::rename(mz_mz=EnsembleID)
+protres.control.ann <- left_join(protres.control.ann, protres.control, by="mz_mz")
+
+## Reorganize data summary
+protres.control.ann <- protres.control.ann %>% dplyr::select(mz:ProteinName, Node_xMWAS:Centrality.eigenvec_xMWAS, logFC:adj.P.Val)
+
+
+write_csv(protres.control.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Control/proteinResults_Control_withAnnotation.csv")
+
+```
+  
+```{r protann_diab_tranmetprot, message=FALSE}
+# Get annotations for proteins in network
+
+## Add protein names to full list of proteins
+protres.diab.ann <- left_join(allprot, protann, by="mz")
+
+## Add selected features information to full list of proteins with names
+protres.diab.ann <- left_join(protres.diab.ann, selprot, by="mz")
+
+## Add xMWAS results to full data summary we've been creating
+protres.diab <- protres.diab %>% dplyr::rename(mz_mz=EnsembleID)
+protres.diab.ann <- left_join(protres.diab.ann, protres.diab, by="mz_mz")
+
+## Reorganize data summary
+protres.diab.ann <- protres.diab.ann %>% dplyr::select(mz:ProteinName, Node_xMWAS:Centrality.eigenvec_xMWAS, logFC:adj.P.Val)
+
+write_csv(protres.diab.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Diabetic/proteinResults_Diabetic_withAnnotation.csv")
+
+```
+  
+### Centrality comparison of protein communities
+```{r compCentrality_prot_tranmetprot}
+aggregate(protres.control$Centrality.eigenvec_xMWAS~protres.control$Community_xMWAS, FUN=mean)
+
+aggregate(protres.diab$Centrality.eigenvec_xMWAS~protres.diab$Community_xMWAS, FUN=mean)
+```
+  
+```{r commassignmets_prot_ann_tranmetprot}
+# Get annotations for proteins in network
+
+## Add protein names to full list of proteins
+protres.all.ann <- left_join(allprot, protann, by="mz")
+
+## Add selected features information to full list of proteins with names
+protres.all.ann <- left_join(protres.all.ann, selprot, by="mz")
+
+# Get community assignments for proteins in control and diabetic networks and add to full data summary
+comms <- protres.control %>% dplyr::select(mz_mz, Community_xMWAS) %>% dplyr::rename(Community.Control_xMWAS=Community_xMWAS)
+comms <- full_join(comms, protres.diab, by="mz_mz") %>% dplyr::select(mz_mz, Community.Control_xMWAS, Community_xMWAS)  %>% dplyr::rename(Community.Diabetic_xMWAS=Community_xMWAS)
+protres.all.ann <- left_join(protres.all.ann, comms, by="mz_mz")
+
+## Reorganize data summary
+protres.all.ann <- protres.all.ann %>% dplyr::select(mz:ProteinName, Community.Control_xMWAS, Community.Diabetic_xMWAS, logFC:adj.P.Val)
+```
+  
+## Explore differences in protein community assignments
+```{r prot_comm_differencesLOG_tranmetprot}
+# Explore the differences between the proteins in the control and diabetic networks
+
+print("Overall, to what communities in the control network are proteins assigned to community 4 in diabetic samples assigned?")
+protres.all.ann %>% filter(Community.Diabetic_xMWAS=="4") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are proteins assigned to community 5 in diabetic samples assigned?")
+protres.all.ann %>% filter(Community.Diabetic_xMWAS=="5") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+
+print("Overall, to what communities in the control network are proteins assigned to community 6 in diabetic samples assigned?")
+protres.all.ann %>% filter(Community.Diabetic_xMWAS=="6") %>% dplyr::select(Community.Control_xMWAS) %>% table(useNA = "ifany")
+```
+  
+  
+## Results: xMWAS transcriptomics, metabolomics, and proteomics - proteins
+    
+#### **Proteins were only found in control communities 2, 3, and 5 and diabetic communities 4, 5, and 6.**  
+    
+#### **In the control network, the highest eigenvector centrality values for proteins were in control community 2, followed by 3, then 5. In the diabetic network, the highest eigenvector centrality values for proteins were in diabetic community 5, followed by 6, then 4.**  
+  
+#### **In the control network, the highest average centrality values were for metabolites in communities 1 and 2, followed by transcripts in community 5, then proteins in community 2. In the diabetic network, the highest average centrality values were for proteins in communities 5, followed by metabolites in community 5, then proteins in communities 6 and 4.**  
+  
+#### **There is greater overlap between control and diabetic networks in proteins included in the networks than there is overlap in features from the other omics data sets. Over half of the proteins in one network are included in the other, spread across the three protein-containing communities in each network.**  
+
+  
+  
+  
+  
+  
+  
+  
+## Delta centrality - proteins
+  
+### Get delta centrality for proteins
+```{r prot_deltaCentralityLOG_tranmetprot}
+# Separate data sets
+prot.deltcent <- deltcent
+prot.deltcent$mz <- rownames(prot.deltcent)
+prot.deltcent <- prot.deltcent %>% filter(grepl("\\d_\\d", prot.deltcent$mz))
+
+# Reformat protein ID
+prot.deltcent$mz <- sapply(strsplit(as.character(prot.deltcent$mz),"_"),"[[",1)
+prot.deltcent$mz <- as.numeric(prot.deltcent$mz)
+                                     
+# Rename some variables
+prot.deltcent <- prot.deltcent %>% dplyr::rename(Centrality.allClasses=allClasses, Centrality.Control=Control, Centrality.Diabetic=Diabetic, dCentrality.Diabetic_vs_Control=Diabetic_vs_Control)
+
+# Retain proteins with delta centrality>0.1 between diabetic and control samples
+sigprot.deltcent <- prot.deltcent %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+```
+  
+### Get annotations for proteins with greatest delta centrality
+```{r prot_deltaCentralityLOG_ann_tranmetprot}
+# Get annotations for proteins in network
+
+## Add delta centrality information to full data summary we created
+protres.all.ann <- left_join(protres.all.ann, prot.deltcent, by="mz")
+
+## Reorganize data summary
+protres.all.ann <- protres.all.ann %>% dplyr::select(mz:ProteinName, Centrality.allClasses, Centrality.Control, Community.Control_xMWAS, Centrality.Diabetic, Community.Diabetic_xMWAS, dCentrality.Diabetic_vs_Control, logFC:adj.P.Val) %>% arrange(desc(dCentrality.Diabetic_vs_Control))
+
+write_csv(protres.all.ann, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/Results_Allproteins_withAnnotation.csv")
+
+## proteins with high delta centrality
+sigprotres.all.ann <- protres.all.ann %>% filter(dCentrality.Diabetic_vs_Control>0.1)
+
+# Get raw delta centrality for diabetic vs control networks
+protres.dcdir <- protres.all.ann %>% mutate(Centrality.dif=Centrality.Diabetic-Centrality.Control)
+protres.dcdir <- protres.dcdir %>% dplyr::select(GeneSymbol, Centrality.dif)
+```
+  
+### Explore differences in community assignments for proteins with high delta centrality
+```{r commprot_deltaCentrality_differencesLOG_tranmetprot}
+# Explore the differences between the proteins in the control and diabetic networks
+
+table(sigprotres.all.ann$Community.Control_xMWAS)
+
+table(sigprotres.all.ann$Community.Diabetic_xMWAS)
+
+```
+  
+### Pathway enrichment analysis (GSEA) proteins with high delta centrality
+  
+#### Format delta centrality >0.1 data for GSEA
+```{r prot_deltaCentrality_GSEAformat_tranmetprot}
+# Get just gene names and raw change in centrality between networks, which will be the ranking for GSEA
+gsea.centdif <- protres.dcdir %>% dplyr::rename(rank=Centrality.dif)
+
+
+# Fill in missing centrality difference values (for those genes not included in the networks) with "0"
+gsea.centdif$rank[is.na(gsea.centdif$rank)] <- 0
+
+ranks <- as.numeric(gsea.centdif$rank)
+names(ranks) <- gsea.centdif$GeneSymbol
+ranks <- sort(ranks, decreasing=TRUE)
+
+# Identify duplicates
+duplicates <- names(ranks)[duplicated(names(ranks)) | duplicated(names(ranks), fromLast = TRUE)]
+print(duplicates)
+
+# Retain the highest value among duplicates
+if(length(duplicates)>0){
+  ranks_unique <- tapply(ranks, INDEX = names(ranks), FUN = max)
+  ranks <- sort(ranks_unique, decreasing=TRUE)
+}
+```
+  
+#### Gene Ontology enrichment analysis
+```{r prot_pathfgseaGO_deltaCentrality_tranmetprot}
+set.seed(08162023)
+
+fgseaRes <- fgsea(pathways = go, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+    
+```{r prot_gseaGO_deltaCentrality_pathsel_tranmetprot}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/proteins/fgseaRes_GO.txt", sep="\t", sep2=c("", " ", ""))
+
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/proteins/fgseaRes_GO.txt")
+
+# Replace pathtab values with those from fgseaRes in case of issues with read-in
+pathtab$pval <- fgseaRes$pval
+pathtab$padj <- fgseaRes$padj
+pathtab$ES <- fgseaRes$ES
+pathtab$NES <- fgseaRes$NES
+
+
+# Select top 10 up-regulated pathways (centrality of proteins is basically 0 in control networks, so no down-regulated pathways here)
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:10,]
+
+topdown <- pathtab %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("GO.+?_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+top$Direction[1:10] <- "Up"
+top$Direction[11:20] <- "Down"
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+
+
+# Write cleaned table
+write_csv(top, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/proteins/Top_GSEA_Pathways_GO.csv")
+```
+  
+#### **The number of GO BPs represented (p<0.05) among the proteins with higher delta centrality was `r pathtab %>% filter(pval<0.05) %>% nrow()`.**  
+#### **The number of GO BPs represented (padj<=0.1) among the proteins with higher delta centrality was `r pathtab %>% filter(padj<0.1) %>% nrow()`.**  
+  
+  
+#### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r prot_sigpathgraph_deltaCentrality_GO_tranmetprot, fig.width=7, fig.height=3.5}
+# Summarize pathway information and create negative log p value variable for graphing
+# Black = delta centrality higher in diabetic network
+pathg <- top %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+pathg$pathway[which(pathg$pathway=="OXIDOREDUCTASE ACTIVITY ACTING ON THE ALDEHYDE OR OXO GROUP OF DONORS")] <- "OXIDOREDUCTASE ACTIVITY ACTING ON\nTHE ALDEHYDE/OXO GROUP OF DONORS"
+pathg$pathway[which(pathg$pathway=="PROTEIN LOCALIZATION TO ENDOPLASMIC RETICULUM")] <- "PROTEIN LOCALIZATION TO\nENDOPLASMIC RETICULUM"
+
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(aes(fill = ifelse(ES < 0, "red", "black")), stat = "identity") +
+  scale_fill_identity() +  # Ensure the colors are applied as specified
+  coord_flip() +
+  scale_x_discrete(name="GO Biological Processes Associated\nwith Greatest Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/proteins/pathsigfig_GO.png", dpi=300)
+
+```
+  
+  
+#### KEGG pathway enrichment analysis
+```{r prot_pathfgseaKEGG_deltaCentrality_tranmetprot}
+set.seed(08162023)
+
+fgseaRes <- fgsea(pathways = kegg, 
+                  stats = ranks,
+                  minSize=6,
+                  maxSize=500,
+                  nproc=1)
+```
+    
+```{r prot_gseaKEGG_deltaCentrality_pathsel_tranmetprot}
+# write table
+fwrite(fgseaRes, file="C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/proteins/fgseaRes_KEGG.txt", sep="\t", sep2=c("", " ", ""))
+
+# read table
+pathtab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/proteins/fgseaRes_KEGG.txt")
+
+
+# Select top 10 up-regulated pathways
+topup <- pathtab %>% filter(ES > 0)
+topup <- topup[order(topup$pval),]
+topup <- topup[1:12,]
+
+topdown <- pathtab %>% filter(ES < 0)
+topdown <- topdown[order(topdown$pval),]
+topdown <- topdown[1:10,]
+
+top <- rbind(topup, rev(topdown))
+
+# Clean up pathway names
+top$pathway <- top$pathway %>% str_replace("KEGG_", "") %>% str_replace_all("_", " ")
+
+# label whether pathways are more or less active
+top$Direction <- "Blank"
+top$Direction[1:12] <- "Up"
+top$Direction[13:22] <- "Down"
+
+top <- top[order(top$pval),]
+top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
+
+# Write cleaned table
+write_csv(top, "C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/proteins/Top_GSEA_Pathways_KEGG.csv")
+```
+  
+#### **The number of KEGG Pathways represented (p<0.05) among the proteins with higher delta centrality was `r pathtab %>% filter(pval<0.05) %>% nrow()`.**  
+#### **The number of KEGG Pathways represented (padj<0.1) among the proteins with higher delta centrality was `r pathtab %>% filter(padj<=0.1) %>% nrow()`.**  
+  
+  
+#### Plot pathway analysis results
+  
+#### Significant pathways (padj < 0.1)
+```{r prot_sigpathgraph_deltaCentrality_KEGG_tranmetprot, fig.width=7, fig.height=5}
+# Summarize pathway information and create negative log p value variable for graphing
+# Black = delta centrality higher in diabetic network
+pathg <- top %>% filter(padj<=0.1) 
+pathg <- pathg %>% mutate(neglogpvalue=-log10(pval))
+
+  # Graph pathways by p value
+  pathfig <- ggplot(pathg, aes(x=reorder(pathway, neglogpvalue), y=neglogpvalue, fill=Direction)) +
+  geom_bar(aes(fill = ifelse(ES < 0, "red", "black")), stat = "identity") +
+  scale_fill_identity() +  # Ensure the colors are applied as specified
+  coord_flip() +
+  scale_x_discrete(name="KEGG Pathways Associated with Greatest Delta Centrality") +
+  ylab("-log(p value)") +
+  theme(axis.text.x = element_text(face="bold", size=10, angle=0),
+        axis.text.y = element_text(face="bold", size=10, angle=0))
+
+  pathfig
+
+  ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_output_mettranprot/DeltaCentrality_Pathways/proteins/pathsigfig_KEGG.png")
+
+```
+  
+  
+### Results: delta centrality - proteins
+  
+#### **`r nrow(sigprot.deltcent)` proteins had a difference in eigenvector centrality score >0.1 between diabetic sample and non-diabetic control sample networks (delta centrality).**  
+  
+#### **When we performed gene set enrichment analysis (GSEA) with these `r nrow(sigprot.deltcent)` proteins, the following GO Biological Processes were identified at FDR<0.1: proteasome complex, cadherin binding, cell adhesion molecule binding, COPII-coated vesicle budding, viral life cycle, nucleus localization, oxidoreductase activity acting on the aldehyde or oxo group of donors, protein localization to endoplasmic reticulum.**  
+#### **The following KEGG pathways were identified at FDR<0.1: valine, leucine, and isoleucine degradation; T cell receptor signaling pathway; ribosome; fatty acid metabolism; regulation of actin cytoskeleton; pathogenic Escherichia coli infection; chronic myeloid leukemia; natural killer cell-mediated cytotoxicity; B cell receptor signaling pathway; acute myeloid leukemia; focal adhesion; melanoma; small cell lung cancer.**  
+  
+#### **A relatively high percentage of proteins from all communities had delta centrality >0.1, from 46.1% of the `r protres.all.ann %>% filter(Community.Control_xMWAS=="5") %>% nrow()` proteins in control network community 5 to 64.7% of the `r protres.all.ann %>% filter(Community.Control_xMWAS=="3") %>% nrow()` proteins in control network community 3 and from 51.3% of the `r protres.all.ann %>% filter(Community.Diabetic_xMWAS=="4") %>% nrow()` proteins in diabetic community 4 to 68.7% of the `r protres.all.ann %>% filter(Community.Diabetic_xMWAS=="5") %>% nrow()` proteins in diabetic community 5.**  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+
+  
+```{r session}
+sessionInfo()
+```
+
