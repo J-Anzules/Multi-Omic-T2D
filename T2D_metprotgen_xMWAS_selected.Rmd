@@ -23,16 +23,17 @@ library(readxl)
 # Format data sets
 ```{r importdata, message=FALSE}
 # transcriptomics - counts
-tran <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Genomics_for_Vicki/NewAnalysis/ExpressionData_filtered.csv")
+tran <- read_csv("../Data/xMWAS_data/ExpressionData_filtered.csv")
 
 # metabolomics - prefiltered, raw values
-met <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Metabolomics_for_Vicki/FeatureTable_justprefiltered.csv")
+met <- read_csv("../Data/xMWAS_data/FeatureTable_justprefiltered.csv")
 
 # proteomics - prefiltered, raw values
-prot <-  read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Proteomics_for_Vicki/Analysis_Houser/ExpressionTable_justprefiltered.csv")
+prot <-  read_csv("../Data/xMWAS_data/ExpressionTable_justprefiltered.csv")
 
 # class labels
-key <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/SampleKey.csv")
+key <- read_csv("../Data/xMWAS_data/SampleKey.csv")
+
 ```
   
 ```{r wrangletran}
@@ -70,7 +71,7 @@ met <- met[,-1]
 met<-met[names(tran)]
 
 # metabolomics - prefiltered, missing data imputed, raw values for log transformation
-logmet <- read_csv("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/Metabolomics_for_Vicki/FeatureTable_prefiltered.csv", skip=1)
+logmet <- read_csv("../Data/xMWAS_data/FeatureTable_prefiltered.csv", skip=1)
 
 logmet <- data.frame(logmet)
 rownames(logmet) <- logmet[,1] # move features from first column to row names
@@ -109,9 +110,19 @@ key <- key %>% dplyr::select(-CenterID, -CodedID) %>% dplyr::rename(ID=IIDPID, C
 ## Run xMWAS
 ```{r setoutput_tranmet3, message=FALSE}
 
-
-output<-"C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/"
+output<-"../Data/xMWAS_data/T2D_xMWAS_outputLOG_mettran/"
 ```
+
+```{r, find-na-transcriptome}
+# suppressWarnings(if (is.na(Xome_data) == TRUE) {
+#   stop("X data matrix is required.")
+# })
+a = sum(is.na(tran))
+
+which(is.na(tran), arr.ind=TRUE)
+
+```
+
   
 ```{r xmwas_tranmet3, eval=FALSE}
 #Please see user manual for description of arguments:
