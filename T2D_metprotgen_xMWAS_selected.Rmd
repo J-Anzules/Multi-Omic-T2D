@@ -22,6 +22,8 @@ library(readxl)
   
 # Format data sets
 ```{r importdata, message=FALSE}
+
+
 # transcriptomics - counts
 tran <- read_csv("../Data/xMWAS_data/ExpressionData_filtered.csv")
 
@@ -44,6 +46,7 @@ tran <- tran %>% dplyr::select(-external_gene_name)
 rownames(tran) <- tran$EnsembleID # move features from first column to row names
 tran <- tran[,-1]
 names(tran) <- names(tran) %>% str_replace("_C", "") %>% str_replace("_D", "")
+# write.csv(tran, "../Data/xMWAS_data/tran.csv")
 ```
   
 ```{r wrangletranlog}
@@ -59,6 +62,8 @@ logtran[is.na(logtran)] <- mintran/2
 
 # Log transform
 logtran <- log10(logtran)
+
+# write.csv(logtran, "../Data/xMWAS_data/logtran.csv")
 ```
   
 ```{r wranglemet, message=FALSE}
@@ -69,6 +74,8 @@ rownames(met) <- met[,1] # move features from first column to row names
 met <- met[,-1]
 # Order samples to match transcriptomics data set
 met<-met[names(tran)]
+
+# write.csv(met, "../Data/xMWAS_data/met.csv")
 
 # metabolomics - prefiltered, missing data imputed, raw values for log transformation
 logmet <- read_csv("../Data/xMWAS_data/FeatureTable_prefiltered.csv", skip=1)
@@ -83,6 +90,8 @@ logmet <- log10(logmet)
 
 # Order samples to match transcriptomics data set
 logmet<-logmet[names(tran)]
+
+# write.csv(logmet, "../Data/xMWAS_data/logmet.csv")
 ```
   
 ```{r wrangleprot}
@@ -92,17 +101,24 @@ prot <- prot[-1,] # remove row with class labels
 rownames(prot) <- prot$mz_mz # move features from first column to row names
 prot <- prot[,-1]
 
+# write.csv(prot, "../Data/xMWAS_data/prot.csv")
+
 # create data set with labels for samples with missing data
 prot5 <- prot
 prot5[,((ncol(prot5))+1):(ncol(prot5)+length(names(tran)[!names(tran)%in%names(prot)]))] <- NA
 names(prot5)[((ncol(prot5)+1)-(length(names(tran)[!names(tran)%in%names(prot)]))):ncol(prot5)] <- names(tran)[!names(tran)%in%names(prot)]
 # Order samples to match transcriptomics data set
 prot5<-prot5[names(tran)]
+
+# write.csv(prot5, "../Data/xMWAS_data/prot5.csv")
 ```
   
 ```{r wranglelab}
+# setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+# key <- read_csv("../Data/xMWAS_data/SampleKey.csv")
 key <- data.frame(key)
 key <- key %>% dplyr::select(-CenterID, -CodedID) %>% dplyr::rename(ID=IIDPID, Class=Group)
+# write.csv(key, "../Data/xMWAS_data/key.csv")
 ```
   
 # Transcriptomics and metabolomics
@@ -110,27 +126,16 @@ key <- key %>% dplyr::select(-CenterID, -CodedID) %>% dplyr::rename(ID=IIDPID, C
 ## Run xMWAS
 ```{r setoutput_tranmet3, message=FALSE}
 
-output<-"../Data/xMWAS_data/T2D_xMWAS_outputLOG_mettran/"
+output<-"C:/Users/jonan/Documents/Tyseq/Data/xMWAS_data/T2D_xMWAS_outputLOG_mettran/"
 ```
 
-```{r, find-na-transcriptome}
-# suppressWarnings(if (is.na(Xome_data) == TRUE) {
-#   stop("X data matrix is required.")
-# })
-a = sum(is.na(tran))
 
-which(is.na(tran), arr.ind=TRUE)
-
-```
-
-  
 ```{r xmwas_tranmet3, eval=FALSE}
 #Please see user manual for description of arguments:
 #https://github.com/kuppal2/xMWAS/blob/master/example_manual_tutorial/xMWAS-manual.pdf
 
 #integrate transcriptomics and metabolomics data sets since all samples aren't represented in proteomics data
-xmwas_res<-run_xmwas(Xome_data=tran,Yome_data=logmet,Zome_data=NA,Wome_data=NA,outloc=output,
-classlabels=key,class_fname=NA,xmwasmethod="spls",plsmode="canonical",
+xmwas_res<-run_xmwas(Xome_data=tran,Yome_data=logmet,Zome_data=NA,Wome_data=NA,outloc=output,classlabels=key,class_fname=NA,xmwasmethod="spls",plsmode="canonical",
 max_xvar=nrow(tran)*0.3, #e.g. select top 10000 of the variables in X dataset based on relative standard deviation; change according to your dataset; you can also use proportion such as round(nrow(xMat)*0.3) to select top 30% of the variables.
 max_yvar=nrow(logmet)*0.3, 
 max_zvar=5000, 
@@ -167,13 +172,14 @@ plot.pairwise=FALSE, #plot results for pairwise comparisons: TRUE or FALSE
 apply.sparse.class.comparison=TRUE, #perform variable selection in sPLS during class-wise comparison (default: FALSE)
 layout.type="fr1")
 ```
+
   
 ```{r centralitycomp_allnodes_tranmet, fig.height=4, fig.width=4}
 ## Read in results for controls
-res.control <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Control/cluster_membership_centrality_Control_table.txt")
+res.control <- read.delim("C:/Users/jonan/Documents/Tyseq/Data/xMWAS_data/T2D_xMWAS_outputLOG_mettran/Control/cluster_membership_centrality_Control_table.txt")
 
 ## Read in results for diabetic samples
-res.diab <- read.delim("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/Diabetic/cluster_membership_centrality_Diabetic_table.txt")
+res.diab <- read.delim("C:/Users/jonan/Documents/Tyseq/Data/xMWAS_data/T2D_xMWAS_outputLOG_mettran/Diabetic/cluster_membership_centrality_Diabetic_table.txt")
 
 cent.control <- res.control %>% dplyr::select(Name, centrality_vec) %>% dplyr::rename(Centrality=centrality_vec) %>% mutate(Network="Non-Diabetic")
 cent.diab <- res.diab %>% dplyr::select(Name, centrality_vec) %>% dplyr::rename(Centrality=centrality_vec) %>% mutate(Network="Diabetic")
@@ -189,7 +195,7 @@ ggplot(aes(x=Network, y=Centrality), data=cent) +
   ylab("Eigenvector Centrality")
 
 
-ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/CentralityComparison_allfeatures.png", dpi=300)
+ggsave("C:/Users/jonan/Documents/Tyseq/Data/xMWAS_data/T2D_xMWAS_outputLOG_mettran/Figures/CentralityComparison_allfeatures.png", dpi=300)
 ```
   
 ```{r centralitycompbyfeature_allnodes_tranmet, fig.height=4, fig.width=8}
@@ -207,7 +213,7 @@ ggplot(aes(x=`Node Type`, y=Centrality), data=cent) +
   facet_wrap(~Network)
 
 
-ggsave("C:/Users/mecho/Documents/Hertzberg_Lab/T2D/xMWAS/T2D_xMWAS_outputLOG_mettran/CentralityComparison_byFeatureType.png", dpi=300)
+ggsave("C:/Users/jonan/Documents/Tyseq/Data/xMWAS_data/T2D_xMWAS_outputLOG_mettran/Figures/CentralityComparison_byFeatureType.png", dpi=300)
 
 ```
 
