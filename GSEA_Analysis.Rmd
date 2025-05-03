@@ -16,7 +16,8 @@ library(dplyr)
 library(tidyr)
 library(stringr) # for cleaning gense set names
 
-results <- read.csv("../Data/DGE_Results.csv")
+# results <- read.csv("../Data/DGE_Results.csv")
+results <- read.csv("../Data/DGE_Results_No_ABDG032.csv")
 ```
 
 # Cleaning and Preparing data
@@ -88,6 +89,7 @@ fgseaRes <- fgseaRes[order(fgseaRes$pval), ]
 fgseaRes$leadingEdge <- sapply(fgseaRes$leadingEdge, paste, collapse = ",")
 
 # # Save the modified dataframe to a CSV file
+# write.csv(fgseaRes, "C:/Users/jonan/Documents/Tyseq/Data/For_Reviewer_Response/GSEA_Results/fgseaResults_with_strings_filtered.csv", row.names = FALSE)
 # write.csv(fgseaRes, "C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings_filtered.csv", row.names = FALSE)
 # 
 # # Read back in the table 
@@ -116,7 +118,8 @@ top <- top %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
 
 
 # Write cleaned table
-write.csv(top, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/Top_GSEA_Pathways_GO_filtered.csv")
+# write.csv(top, "C:/Users/jonan/Documents/Tyseq/Data/For_Reviewer_Response/GSEA_Results/Top_GSEA_Pathways_GO_filtered.csv")
+# write.csv(top, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/Top_GSEA_Pathways_GO_filtered.csv")
 
 ```
 
@@ -143,7 +146,8 @@ if (nrow(pathg) >= 1) {
 
   # Save the figure with increased width (e.g., width = 10 inches)
   # ggsave("C:/Users/jonan/Documents/Tyseq/Figures/Up-Down_GO_pathways.png", width = 12)
-  ggsave("../Data/ForReview/Up-Down_GO_pathways2.png", width = 12, dpi = 300)
+  ggsave("../Data/For_Reviewer_Response/GSEA_Results/Up-Down_GO_pathways2.png", width = 12, dpi = 300)
+  # ggsave("../Data/ForReview/Up-Down_GO_pathways2.png", width = 12, dpi = 300)
 }
 
 
@@ -196,6 +200,7 @@ fgseaRes_kegg <- fgseaRes_kegg[order(fgseaRes_kegg$pval), ]
 fgseaRes_kegg$leadingEdge <- sapply(fgseaRes_kegg$leadingEdge, paste, collapse = ",")
 
 # # Save the modified dataframe to a CSV file
+write.csv(fgseaRes_kegg, "C:/Users/jonan/Documents/Tyseq/Data/For_Reviewer_Response/GSEA_Results/KEGG/fgseaResults_with_strings_filtered.csv", row.names = FALSE)
 # write.csv(fgseaRes_kegg, "C:/Users/jonan/Documents/Tyseq/Data/fgseaResults_with_strings_filtered.csv", row.names = FALSE)
 # 
 # # Read back in the table 
@@ -225,6 +230,7 @@ top_kegg <- top_kegg %>% filter(pval<=0.05) %>% filter(!is.na(pathway))
 
 # Write cleaned table
 # write_csv(top_kegg, "C:/Users/jonan/Documents/Tyseq/Data/ForReview/top_kegg_GSEA_Pathways_KEGG.csv")
+write_csv(top_kegg, "C:/Users/jonan/Documents/Tyseq/Data/For_Reviewer_Response/GSEA_Results/KEGG/top_kegg_GSEA_Pathways_KEGG.csv")
 
 ```
 
@@ -251,8 +257,9 @@ if (nrow(pathg) >= 1) {
   pathfig
 
   # Save the figure with increased width (e.g., width = 10 inches)
-  ggsave("C:/Users/jonan/Documents/Tyseq/Figures/Up-Down_KEGG_pathways.png", width = 12)
-  ggsave("../Data/ForReview/Up-Down_KEGG_pathways.png", width = 12, dpi = 300)
+  # ggsave("C:/Users/jonan/Documents/Tyseq/Figures/Up-Down_KEGG_pathways.png", width = 12)
+  # ggsave("../Data/ForReview/Up-Down_KEGG_pathways.png", width = 12, dpi = 300)
+  ggsave("../Data/For_Reviewer_Response/GSEA_Results/KEGG/Up-Down_KEGG_pathways.png", width = 12, dpi = 300)
 }
 
 
