@@ -62,8 +62,37 @@ tx2gene <- read.csv("../Data/tx2gene.csv")
 # write.csv(tx2gene, file = "../Data/tx2gene.csv", row.names = FALSE)
 
 ```
-
+#original
 ```{r sample setup}
+# # Setting up files for upload
+# 
+# # "../Data/SalmonQuant/quantALL/"
+# control_files = c("../Data/SalmonQuant/quantALL/1_XIN460_NHI_ATTACT_L005_R1_001_quant.sf", 
+#                   "../Data/SalmonQuant/quantALL/2_XGM061_NHI_TCCGGA_L005_R1_001_quant.sf",
+#                   "../Data/SalmonQuant/quantALL/3_XJL334_NHI_CGCTCA_L005_R1_001_quant.sf",
+#                   "../Data/SalmonQuant/quantALL/4_ZCA126_NHI_GAGATT_L005_R1_001_quant.sf",
+#                   "../Data/SalmonQuant/quantALL/5_XGZ492_NHI_ATTCAG_L005_R1_001_quant.sf")
+# 
+# T1D_files = c("../Data/SalmonQuant/quantALL/6_AAFS251_T2DHI_GAATTC_L005_R1_001_quant.sf",
+#               "../Data/SalmonQuant/quantALL/7_AAJ2482_T2DHI_CTGAAG_L005_R1_001_quant.sf",
+#               "../Data/SalmonQuant/quantALL/8_AABW178_T2DHI_TAATGC_L005_R1_001_quant.sf",
+#               "../Data/SalmonQuant/quantALL/9_XIX456_T2DHI_CGGCTA_L005_R1_001_quant.sf",
+#               "../Data/SalmonQuant/quantALL/10_ABDG032_T2DHI_TCCGCG_L005_R1_001_quant.sf")
+# 
+# # Creating a sample table that maps each sample to its corresponding quant.sf file
+# # _C = control
+# # _D = Diabetic
+# sample_table <- data.frame(
+#   sampleName = c("XIN460_C", "XGM061_C", "XJL334_C", "ZCA126_C", "XGZ492_C",
+#                  "AAFS251_D", "AAJ2482_D", "AABW178_D", "XIX456_D", "ABDG032_D"),
+#   fileName = c(control_files, T1D_files),
+#   diabetes_status = c(rep("No", 5), rep("Yes", 5))
+# )
+
+```
+
+# Removed ABDG032_D
+```{r}
 # Setting up files for upload
 
 # "../Data/SalmonQuant/quantALL/"
@@ -76,20 +105,27 @@ control_files = c("../Data/SalmonQuant/quantALL/1_XIN460_NHI_ATTACT_L005_R1_001_
 T1D_files = c("../Data/SalmonQuant/quantALL/6_AAFS251_T2DHI_GAATTC_L005_R1_001_quant.sf",
               "../Data/SalmonQuant/quantALL/7_AAJ2482_T2DHI_CTGAAG_L005_R1_001_quant.sf",
               "../Data/SalmonQuant/quantALL/8_AABW178_T2DHI_TAATGC_L005_R1_001_quant.sf",
-              "../Data/SalmonQuant/quantALL/9_XIX456_T2DHI_CGGCTA_L005_R1_001_quant.sf",
-              "../Data/SalmonQuant/quantALL/10_ABDG032_T2DHI_TCCGCG_L005_R1_001_quant.sf")
+              "../Data/SalmonQuant/quantALL/9_XIX456_T2DHI_CGGCTA_L005_R1_001_quant.sf"
+              )
 
 # Creating a sample table that maps each sample to its corresponding quant.sf file
 # _C = control
 # _D = Diabetic
 sample_table <- data.frame(
   sampleName = c("XIN460_C", "XGM061_C", "XJL334_C", "ZCA126_C", "XGZ492_C",
-                 "AAFS251_D", "AAJ2482_D", "AABW178_D", "XIX456_D", "ABDG032_D"),
+                 "AAFS251_D", "AAJ2482_D", "AABW178_D", "XIX456_D"),
   fileName = c(control_files, T1D_files),
-  diabetes_status = c(rep("No", 5), rep("Yes", 5))
+  diabetes_status = c(rep("No", 5), rep("Yes", 4))
 )
+```
+
+```{r}
+length(control_files)  # should be 5  
+length(T1D_files)      # should be 4  
+length(sample_table$sampleName)  # should be 9
 
 ```
+
 
 # DGE Analysis
 ```{r Loading Count Matrix and Filtering}
@@ -102,8 +138,8 @@ expressed_control <- rowSums(counts[, sample_table$diabetes_status == "No"] > 0)
 expressed_diabetes <- rowSums(counts[, sample_table$diabetes_status == "Yes"] > 0)
 
 # Filter genes based on the 80% criterion for each group
-keep_genes <- (expressed_control >= 0.8 * sum(sample_table$diabetes_status == "No")) | 
-              (expressed_diabetes >= 0.8 * sum(sample_table$diabetes_status == "Yes"))
+keep_genes <- (expressed_control >= floor(0.8 * sum(sample_table$diabetes_status == "No"))) | 
+              (expressed_diabetes >= floor(0.8 * sum(sample_table$diabetes_status == "Yes")))
 
 # Apply the filter to the counts matrix
 filtered_counts <- counts[keep_genes, ]
@@ -155,7 +191,7 @@ norm_counts <- counts(dds, normalized=TRUE)
 
 
 # Preparing Ensembl IDs (removing version numbers as before)
-ensemble_ids <- gsub("\\.\\d+$", "", rownames(norm_counts))
+ensembl_ids <- gsub("\\.\\d+$", "", rownames(norm_counts))
 rownames(norm_counts) <- gsub("\\.\\d+$", "", rownames(norm_counts))
 
 # Connecting to Ensembl and retrieve gene names
@@ -178,9 +214,11 @@ dim(norm_counts)
 # Filter out rows where row names are NA or empty
 norm_counts <- norm_counts[!is.na(rownames(norm_counts)) & rownames(norm_counts) != "", ]
 
-rownames(norm_counts)
+# rownames(norm_counts)
 # Save the updated norm_counts data frame
-write.csv(norm_counts, "../Data/normalized_gene_expression_data.csv", row.names = TRUE)
+
+write.csv(norm_counts, "../Data/normalized_gene_expression_data_No_ABDG032.csv", row.names = TRUE)
+# write.csv(norm_counts, "../Data/normalized_gene_expression_data.csv", row.names = TRUE)
 
 ```
 
@@ -229,6 +267,7 @@ results$neg_log10_Adjpvalue <- -log10(results$padj)
 ```{r Saving results}
 
 
+# write.csv(results, "../Data/ForReview/DESeqResults_No_ABDG032.csv", row.names = FALSE)
 # write.csv(results, "../Data/ForReview/DESeqResults.csv", row.names = FALSE)
 
 # Filtering for significant genes based on pvalue
@@ -243,9 +282,13 @@ dim(sigGenes_p)
 dim(sigGenes_padj)
 
 # Saving all df's
-write.csv(results, "../Data/DGE_Results.csv", row.names = FALSE)
-write.csv(sigGenes_p, file = "../Data/DGE_sig_genes_p.csv", row.names = FALSE)
-write.csv(sigGenes_padj, file = "../Data/DGE_sig_genes_adjp.csv", row.names = FALSE)
+# write.csv(results, "../Data/DGE_Results.csv", row.names = FALSE)
+# write.csv(sigGenes_p, file = "../Data/DGE_sig_genes_p.csv", row.names = FALSE)
+# write.csv(sigGenes_padj, file = "../Data/DGE_sig_genes_adjp.csv", row.names = FALSE)
+
+write.csv(results, "../Data/DGE_Results_No_ABDG032.csv", row.names = FALSE)
+write.csv(sigGenes_p, file = "../Data/DGE_sig_genes_p_No_ABDG032.csv", row.names = FALSE)
+write.csv(sigGenes_padj, file = "../Data/DGE_sig_genes_adjp_No_ABDG032.csv", row.names = FALSE)
 
 ```
 
@@ -279,10 +322,11 @@ gene_expression_data <- merge(gene_expression_data, converted_ids, by.x = "Ensem
 # Removing empty and NA genesymbol entries
 gene_expression_data <- subset(gene_expression_data, !(is.na(external_gene_name) | external_gene_name == ""))
 
-write.csv(gene_expression_data, "../Data/ExpressionData_filtered.csv")
-
+# write.csv(gene_expression_data, "../Data/ExpressionData_filtered.csv")
+write.csv(gene_expression_data, "../Data/ExpressionData_filtered_No_ABDG032.csv")
 
 ```
+
 
 ```{r Sanity check}
 # Checking to see that the right columns are associated to the right patient ID

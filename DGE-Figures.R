@@ -3,7 +3,8 @@ library(pheatmap)
 library(RColorBrewer)
 library(ggplot2)
 setwd("/Users/jonan/Documents/Tyseq/Code/")
-results = read.csv("../Data/DGE_Results.csv") # Results  from DGE analysis
+results = read.csv("../Data/DGE_Results_No_ABDG032.csv") # Results  from DGE analysis
+# results = read.csv("../Data/DGE_Results.csv") # Results  from DGE analysis
 
 fig_width= 10
 fig_height = 10
@@ -26,10 +27,13 @@ volcano_pvalue <- ggplot(results, aes(x = log2FoldChange, y = neg_log10_pvalue))
 
 
 
-ggsave(filename = "../Figures/volcano_pvalue.png", 
+# ggsave(filename = "../Figures//volcano_pvalue.png", 
+ggsave(filename = "../Figures/ForReviewer/volcano_pvalue.png", 
        plot = volcano_pvalue,
        width = fig_width, height = fig_height, dpi = 600)
-ggsave(filename = "../Figures/volcano_pvalue.pdf", 
+
+# ggsave(filename = "../Figures/volcano_pvalue.pdf", 
+ggsave(filename = "../Figures/ForReviewer/volcano_pvalue.pdf", 
        plot = volcano_pvalue,
        width = fig_width, height = fig_height, dpi = 600)
 
@@ -70,9 +74,9 @@ volcano_plot_adjusted <-  ggplot(results, aes(x = log2FoldChange, y = -log10(pad
        title = "Volcano Plot") +
   theme_bw()
 
-ggsave(filename = "../Figures/volcano_adj_labeled.png", plot = volcano_plot_adjusted,
+ggsave(filename = "../Figures/ForReviewer/volcano_adj_labeled.png", plot = volcano_plot_adjusted,
        width = fig_width, height = fig_height, dpi = 600)
-ggsave(filename = "../Figures/volcano_adj_labeled.pdf", plot = volcano_plot_adjusted,
+ggsave(filename = "../Figures/ForReviewer/volcano_adj_labeled.pdf", plot = volcano_plot_adjusted,
        width = fig_width, height = fig_height, dpi = 600)
 
 
@@ -91,10 +95,10 @@ ggsave(filename = "../Figures/volcano_adj_labeled.pdf", plot = volcano_plot_adju
 #                               HEAT MAP
 #-----------------------------------------------------------------------------#
 # Load data
-sigGenes_padj <- read.csv("../Data/DGE_sig_genes_adjp.csv")
+sigGenes_padj <- read.csv("../Data/DGE_sig_genes_adjp_No_ABDG032.csv")
 
 #Removing duplicate row names
-dfnorm <- read.csv("../Data/normalized_gene_expression_data.csv", check.names = FALSE)
+dfnorm <- read.csv("../Data/normalized_gene_expression_data_No_ABDG032.csv", check.names = FALSE)
 rownames(dfnorm) <- make.names(dfnorm[,1], unique=TRUE)
 dfnorm <- dfnorm[, -1] # Remove the first column
 
@@ -114,18 +118,17 @@ control_files = c("../Data/SalmonQuant/quantALL/1_XIN460_NHI_ATTACT_L005_R1_001_
 T1D_files = c("../Data/SalmonQuant/quantALL/6_AAFS251_T2DHI_GAATTC_L005_R1_001_quant.sf",
               "../Data/SalmonQuant/quantALL/7_AAJ2482_T2DHI_CTGAAG_L005_R1_001_quant.sf",
               "../Data/SalmonQuant/quantALL/8_AABW178_T2DHI_TAATGC_L005_R1_001_quant.sf",
-              "../Data/SalmonQuant/quantALL/9_XIX456_T2DHI_CGGCTA_L005_R1_001_quant.sf",
-              "../Data/SalmonQuant/quantALL/10_ABDG032_T2DHI_TCCGCG_L005_R1_001_quant.sf")
+              "../Data/SalmonQuant/quantALL/9_XIX456_T2DHI_CGGCTA_L005_R1_001_quant.sf")
+              # "../Data/SalmonQuant/quantALL/10_ABDG032_T2DHI_TCCGCG_L005_R1_001_quant.sf")
 
 # Creating a sample table that maps each sample to its corresponding quant.sf file
 # _C = control
 # _D = Diabetic
 sample_table <- data.frame(
   sampleName = c("XIN460_C", "XGM061_C", "XJL334_C", "ZCA126_C", "XGZ492_C",
-                 "AAFS251_D", "AAJ2482_D", "AABW178_D", "XIX456_D", "ABDG032_D"),
+                 "AAFS251_D", "AAJ2482_D", "AABW178_D", "XIX456_D"),# "ABDG032_D"),
   fileName = c(control_files, T1D_files),
-  diabetes_status = c(rep("No", 5), rep("Yes", 5))
-)
+  diabetes_status = c(rep("No", 5), rep("Yes",4))) #, 5)))
 
 # Assuming you have a dataframe named 'sample_table' with sample conditions
 # Create a simple group annotation based on your sample data
@@ -164,6 +167,6 @@ pheatmap(dfhm_matrix,
          clustering_method="ward.D2", 
          annotation_col=grpann["DisplayGroup"],  # Use only the DisplayGroup column for annotations
          annotation_colors=annCol,  
-         filename="../Figures/heatmap_FDR.png", #png
+         filename="../Figures/ForReviewer/heatmap_FDR.png", #png
          # filename="../Figures/heatmap_FDR.pdf", #pdf
          width=10, height=8, dpi=600)
